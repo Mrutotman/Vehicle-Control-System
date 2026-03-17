@@ -31,6 +31,9 @@ bool emergencyStopPressed();
 bool rpiHeartbeatReceived();
 uint8_t getRPiCommandMode(); // 0=IDLE, 1=MANUAL, 2=AUTO, 3=FAULT, 4=ESTOP [cite: 84]
 
+// Additional helper function to check if we're in autonomous mode
+bool isAutonomousMode();
+
 // Mode constants for RC/RPi logic [cite: 84]
 #define MODE_IDLE   0
 #define MODE_MANUAL 1

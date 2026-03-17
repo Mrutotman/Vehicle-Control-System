@@ -25,6 +25,7 @@ void printTelemetryAsText(float rpm, int steer, float voltage, uint8_t state);
 // We use the Mbed Threading and Ticker APIs which fulfill the SIDLAK RTOS requirement.
 #include "mbed.h"
 #include "rtos.h"
+#include "vcs_state_machine.h" // Ensure this is included to use isAutonomousMode()
 
 using namespace std::chrono;
 using namespace mbed;
@@ -55,15 +56,19 @@ void taskSpeedControl() {
 void taskSteeringAndSafety() {
     while (true) {
         updateStateMachine();
+        
+        // Grab the auto state to determine if the stepper shaft should be locked or free
+        bool auto_mode = isAutonomousMode();
+
         if (currentState == AUTONOMOUS_STATE) {
-            updateSteeringPID(getTargetSteering());
+            updateSteeringPID(getTargetSteering(), auto_mode);
             applyBrake(getTargetBrake());
         } else if (currentState == MANUAL_STATE) {
-            updateSteeringPID(COMM_STEER_CENTER); 
+            updateSteeringPID(COMM_STEER_CENTER, auto_mode); 
             applyBrake(0);
         } else {
             applyBrake(100); 
-            updateSteeringPID(getMeasuredSteering()); 
+            updateSteeringPID(getMeasuredSteering(), auto_mode); 
         }
         resetHardwareWatchdog();
         ThisThread::sleep_for(10ms); // 100 Hz
@@ -121,6 +126,19 @@ void setup() {
 void loop() {
     uint32_t current_us = micros();
 
+    // 1. Always update the state machine first
+    updateStateMachine();
+    
+    // 2. Get the current target position (from RC or RPi depending on state)
+    uint16_t target_steer = getTargetSteering(); // Assuming you have a function like this
+    
+    // 3. Check the state and update the steering motor
+    bool auto_mode = isAutonomousMode(); 
+    
+    // If auto_mode is true: Stepper is Locked & Active.
+    // If auto_mode is false: Stepper is Unlocked & Power Saving.
+    updateSteeringPID(target_steer, auto_mode);
+
     // FASTEST LOOP: Run continuously to catch state changes
     uint8_t hall = getHallState();
     if (hall != last_hall_state) {
@@ -170,14 +188,14 @@ void loop() {
         updateStateMachine();
         
         if (currentState == AUTONOMOUS_STATE) {
-            updateSteeringPID(getTargetSteering());
+            updateSteeringPID(getTargetSteering(), isAutonomousMode());;
             applyBrake(getTargetBrake());
         } else if (currentState == MANUAL_STATE) {
-            updateSteeringPID(COMM_STEER_CENTER);
+            updateSteeringPID(COMM_STEER_CENTER, isAutonomousMode());;
             applyBrake(0);
         } else {
             applyBrake(100);
-            updateSteeringPID(getMeasuredSteering());
+            updateSteeringPID(getMeasuredSteering(), isAutonomousMode());
         }
         resetHardwareWatchdog();
     }

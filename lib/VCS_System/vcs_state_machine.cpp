@@ -21,9 +21,15 @@ void initState_Machine() {
     faultFlags = 0;
 }
 
+#define TESTING_SIMULATION_MODE true // Set to false when moving to real hardware tests
+
 void updateStateMachine() {
-    // 1. Always read all fault inputs first (Over-current, Under-voltage, etc.)
-    faultFlags = readFaultInputs();
+    // 1. Always read all fault inputs first
+    #if TESTING_SIMULATION_MODE
+        faultFlags = 0; // Assume no fault for simulation
+    #else
+        faultFlags = readFaultInputs();
+    #endif
 
     // 2. Determine next state based on current state and inputs
     switch(currentState) {
@@ -43,18 +49,18 @@ void updateStateMachine() {
                 nextState = FAULT_STATE;
             } else if(rcSwitchPosition() == MODE_MANUAL) {
                 nextState = MANUAL_STATE;
-            } else if(getRPiCommandMode() == MODE_AUTO) {
+            } else if(rcSwitchPosition() == MODE_AUTO && getRPiCommandMode() == MODE_AUTO) {
                 nextState = AUTONOMOUS_STATE;
             } else {
-                nextState = IDLE_STATE; // Stay in IDLE [cite: 213]
+                nextState = IDLE_STATE; 
             }
             break;
 
         case MANUAL_STATE:
             if(faultFlags != 0) {
                 nextState = FAULT_STATE;
-            } else if(rcSwitchPosition() == MODE_IDLE) {
-                nextState = IDLE_STATE;
+            } else if(rcSwitchPosition() == MODE_AUTO) { 
+                nextState = IDLE_STATE; // Drop safely to IDLE to await RPi command
             } else if(emergencyStopPressed()) {
                 nextState = ESTOP_STATE;
             } else {
@@ -65,15 +71,22 @@ void updateStateMachine() {
         case AUTONOMOUS_STATE:
             if(faultFlags != 0) {
                 nextState = FAULT_STATE;
-            } else if(rcSwitchPosition() != MODE_IDLE) { // RC override acts as an interrupt [cite: 229]
-                nextState = MANUAL_STATE;
-            } else if(emergencyStopPressed()) {
+            } 
+            // --- NEW: Human Override Logic for Auto Mode ---
+            else if(rcSwitchPosition() == MODE_MANUAL || 
+                    analogRead(PIN_THROTTLE) > 170 || 
+                    digitalRead(PIN_BRAKE_SW) == HIGH) { 
+                // Driver override detected (Switch toggled, Throttle > 170, or Brake pressed)
+                nextState = MANUAL_STATE; 
+            } 
+            // -----------------------------------------------
+            else if(emergencyStopPressed()) {
                 nextState = ESTOP_STATE;
             } else if(!rpiHeartbeatReceived()) {
-                faultFlags = 2; // FAULT_COMMS_LOSS [cite: 234]
+                faultFlags = 2; // FAULT_COMMS_LOSS
                 nextState = FAULT_STATE;
             } else {
-                nextState = AUTONOMOUS_STATE;
+                nextState = AUTONOMOUS_STATE; // Maintain Auto mode (ANS)
             }
             break;
 
@@ -97,9 +110,15 @@ void updateStateMachine() {
 }
 
 uint8_t rcSwitchPosition() { 
-    // Basic stub using the analog pin defined in vcs_pins.h
-    int val = analogRead(PIN_RC_MODE_SW);
-    if (val > 800) return MODE_AUTO;
-    if (val > 400) return MODE_MANUAL;
-    return MODE_IDLE;
+    // Digital switch: HIGH for manual, LOW for automatic
+    if (digitalRead(PIN_RC_MODE_SW) == HIGH) {
+        return MODE_MANUAL;
+    } else {
+        return MODE_AUTO;
+    }
+}
+
+// Additional helper function to check if we're in autonomous mode
+bool isAutonomousMode() {
+    return (currentState == AUTONOMOUS_STATE);
 }
