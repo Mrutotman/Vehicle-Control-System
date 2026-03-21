@@ -56,7 +56,7 @@ The project follows a modular structure to ensure maintainability and safety iso
 * **`VCS_Actuators`**: Directly controls the throttle PWM and motor controller interfacing.
 * **`VCS_Comm`**: Manages the custom binary UART protocol for Pi-to-ESP32 communication.
 * **`VCS_Config`**: Centralized hub for pin mappings, PID constants, and safety thresholds.
-* **`VCS_Display`**: Drives the $128 \times 64$ I2C OLED for live telemetry.
+* **`VCS_Display`**: Drives the $128 \times 64$ I2C OLED for live telemetry/ and 3 LED indicators.
 * **`VCS_Hall`**: Uses hardware interrupts to calculate RPM for speed feedback.
 * **`VCS_Simulation`**: Physics engine for testing logic without physical hardware.
 * **`VCS_Speed`**: Manages the physical 3-speed toggle and software power-limiting.
