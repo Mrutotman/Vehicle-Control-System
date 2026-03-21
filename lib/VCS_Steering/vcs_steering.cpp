@@ -1,127 +1,114 @@
 /* ==============================================================================
  * MODULE:        VCS_Steering
- * RESPONSIBILITY: Closed-loop Steering Position Control.
+ * RESPONSIBILITY: Closed-loop Steering Position Control using QuickPID.
  * DESCRIPTION:    Maintains the front wheel angle by comparing the Target Angle 
  * from the RPi against the feedback from a 10-turn potentiometer.
- * Uses a PID algorithm to drive a STEPPER motor.
- * Includes 'Center' calibration logic to ensure 500 = straight.
- * HW RESOURCES:   ADC1 (PA0), PUL (PA6), DIR (PA5), ENA (PA4).
  * ============================================================================== */
 
 #include "vcs_steering.h"
 
-// Internal PID state
-static float sum_error = 0.0f;
-static float last_error = 0.0f;
+
+// PID Variables
+float setpoint, input, output;
+QuickPID steeringPID(&input, &output, &setpoint);
 
 // Sample time for 100 Hz loop
-const float Ts_s = 1.0f / FREQ_STEER_CTRL_HZ; // 0.01 seconds
+const float Ts_s = 1.0f / FREQ_STEER_CTRL_HZ;
+
+// ESP32 Hardware Timer Settings for Stepper Pulses (Non-blocking)
+const int steerPwmChannel = 1; 
+const int steerPwmResolution = 8; 
 
 void initSteering() {
     pinMode(PIN_STEER_POT, INPUT);
-    pinMode(PIN_STEER_PUL, OUTPUT);
     pinMode(PIN_STEER_DIR, OUTPUT);
-    pinMode(PIN_STEER_ENA, OUTPUT); // Pin for Power Saving / Shaft Lock
+    pinMode(PIN_STEER_ENA, OUTPUT);
     
-    // Explicitly set ADC to 12-bit (0-4095) for 32-bit architectures.
-    // AVR boards will ignore this and default to their native 10-bit (0-1023).
-    #if defined(ARDUINO_ARCH_STM32) || defined(ARDUINO_ARCH_NRF52840) || defined(ARDUINO_ARCH_MBED)
-        analogReadResolution(12);
-    #endif
+    analogReadResolution(12); // ESP32 12-bit ADC
 
-    // Ensure motor is stopped and driver is DISABLED on boot (Shaft Unlocked, saving power)
-    digitalWrite(PIN_STEER_PUL, LOW);
-    digitalWrite(PIN_STEER_ENA, LOW); // Note: For Common-Anode wiring, LOW = Disabled/Free
-    
-    sum_error = 0.0f;
-    last_error = 0.0f;
+    // Setup hardware timer for non-blocking pulses
+    ledcSetup(steerPwmChannel, 1, steerPwmResolution); 
+    ledcAttachPin(PIN_STEER_PUL, steerPwmChannel);
+    ledcWrite(steerPwmChannel, 127); // 50% duty cycle for the pulse wave
+
+    // Initial state: Disabled/Free
+    digitalWrite(PIN_STEER_ENA, LOW); 
+
+    // QuickPID Configuration
+    steeringPID.SetTunings(STEER_KP, STEER_KI, STEER_KD);
+    steeringPID.SetSampleTimeUs(Ts_s * 1000000);
+    steeringPID.SetOutputLimits(-255, 255);      // Negative = Left, Positive = Right
+    steeringPID.SetMode(QuickPID::Control::automatic);
 }
 
 uint16_t getMeasuredSteering() {
-    // Read the 10-turn pot. 
+    uint16_t current_pos;
+
+    // --- 1. DATA ACQUISITION ---
+#if SIMULATION_MODE
+    // In Simulation, we use the "Digital Twin" position
+    current_pos = (uint16_t)constrain(sim_steer_pos, COMM_STEER_LEFT, COMM_STEER_RIGHT);
+#else
     int raw_adc = analogRead(PIN_STEER_POT);
+
+    // DISCONNECTION CHECK (Hardware Security)
+    if (raw_adc < 50 || raw_adc > 4045) {
+        // Triggering a fault here is best, but we'll return safe-center for now
+        return 500; 
+    }
+
+    // MAPPING PHYSICAL ADC TO COMM SCALE (0-1000)
+    int mapped_pos = map(raw_adc, 0, 4095, COMM_STEER_LEFT, COMM_STEER_RIGHT);
+    current_pos = (uint16_t)constrain(mapped_pos, COMM_STEER_LEFT, COMM_STEER_RIGHT);
+#endif
+
+    // --- 2. VELOCITY CHECK (The "Spike Filter") ---
+    // This is mandatory for 60V systems to ignore sensor noise
+    static uint16_t last_pos = 500;
     
-    // Map ADC resolution to the 0-1000 scale expected by the protocol
-    // Automatically adjusts based on PlatformIO target architecture
-    #if defined(ARDUINO_ARCH_STM32) || defined(ARDUINO_ARCH_NRF52840) || defined(ARDUINO_ARCH_MBED)
-        // 12-bit ADC for STM32 and Nano 33 BLE
-        int mapped_pos = map(raw_adc, 0, 4095, COMM_STEER_LEFT, COMM_STEER_RIGHT);
-    #else
-        // 10-bit ADC for standard 8-bit Arduino (AVR)
-        int mapped_pos = map(raw_adc, 0, 1023, COMM_STEER_LEFT, COMM_STEER_RIGHT);
-    #endif
+    // Calculate the jump: |current - last|
+    if (abs(current_pos - last_pos) > 200) { 
+        // If it jumps > 20% of the range in 10ms, ignore the "spike" 
+        // and return the last known good position.
+        return last_pos; 
+    }
     
-    return (uint16_t)constrain(mapped_pos, COMM_STEER_LEFT, COMM_STEER_RIGHT);
+    last_pos = current_pos;
+    return current_pos;
 }
 
 void updateSteeringPID(uint16_t target_position, bool is_automatic) {
-    uint16_t measured_position = getMeasuredSteering();
-    
-    // 1. Calculate Error
-    float e_steer = (float)target_position - (float)measured_position;
-    
-    // 2. Proportional Term
-    float u_p = STEER_KP * e_steer;
-    
-    // 3. Integral Term
-    sum_error += e_steer * Ts_s;
-    float u_i = STEER_KI * sum_error;
-    
-    // 4. Derivative Term 
-    float u_d = STEER_KD * ((e_steer - last_error) / Ts_s);
-    last_error = e_steer;
-    
-    // 5. Total Output (Effort)
-    float u_steer = u_p + u_i + u_d;
-    
-    // ---AUTO / MANUAL MODE LOGIC---
-    if (!is_automatic) {
-        // Manual Mode: Turn OFF driver. Shaft is UNLOCKED and free to turn.
-        // Current drops to 0.4A (or zero, depending on driver internal wiring).
+    input = (float)getMeasuredSteering();
+    setpoint = (float)target_position;
+
+    // --- SECURITY OVERRIDE ---
+    if (!is_automatic || currentState == FAULT_STATE || currentState == ESTOP_STATE) {
         digitalWrite(PIN_STEER_ENA, LOW); 
-        return; // Exit the function immediately so no pulses are sent
-    } else {
-        // Automatic Mode: Turn ON driver. Shaft is LOCKED (Holding torque applied).
-        digitalWrite(PIN_STEER_ENA, HIGH); 
-    }
-    
-    // 6. Convert to Stepper Direction and Magnitude
-    uint8_t effort = 0;
-    
-    if (u_steer > 0) {
-        // Steer Right
-        digitalWrite(PIN_STEER_DIR, HIGH);
-        effort = (uint8_t)constrain(u_steer, 0, MAX_PWM_DUTY);
-    } else {
-        // Steer Left
-        digitalWrite(PIN_STEER_DIR, LOW);
-        // Invert negative output for effort magnitude
-        effort = (uint8_t)constrain(-u_steer, 0, MAX_PWM_DUTY); 
-    }
-    
-    // Apply deadband to prevent micro-oscillations
-    if (abs(e_steer) < 5) { 
-        // We are at the target position. 
-        // Do NOT turn off the driver here, so the shaft remains LOCKED in Automatic mode.
+        ledcWriteTone(steerPwmChannel, 0); 
         return; 
-    } 
-    
-    // Map PID effort to pulse delay. Higher effort = smaller delay (faster speed).
-    int step_delay = map(effort, 1, MAX_PWM_DUTY, 1000, 35);
-    
-    // Security constraint: enforce strict 35us limit to prevent vibration/driver failure
-    if (step_delay < 35) {
-        step_delay = 35; 
     }
 
-    // Map effort to how many steps to take in this 10ms loop cycle
-    int steps_to_take = map(effort, 1, MAX_PWM_DUTY, 1, 40);
+    steeringPID.Compute();
 
-    // Generate the pulses for the stepper driver
-    for (int i = 0; i < steps_to_take; i++) {
-        digitalWrite(PIN_STEER_PUL, HIGH);
-        delayMicroseconds(step_delay);
-        digitalWrite(PIN_STEER_PUL, LOW);
-        delayMicroseconds(step_delay);
+    // Deadband check
+    if (abs(setpoint - input) < 5) {
+        ledcWriteTone(steerPwmChannel, 0);
+        digitalWrite(PIN_STEER_ENA, HIGH); 
+        return;
     }
+
+    // --- HARDWARE ACTUATION ---
+    bool dir = (output > 0);
+    digitalWrite(PIN_STEER_DIR, dir ? HIGH : LOW);
+
+    float effort = abs(output);
+    int step_frequency_hz = map(effort, 0, 255, 50, 2000); 
+
+#if SIMULATION_MODE
+    // Instead of just making noise, we "move" our simulated rack
+    // We pass the current frequency and direction to the physics engine
+    updateSimulatedPhysics(step_frequency_hz, dir, 0); 
+#else
+    ledcWriteTone(steerPwmChannel, step_frequency_hz);
+#endif
 }

@@ -1,20 +1,17 @@
-#include "vcs_uart.h"
-
 /* ==============================================================================
  * MODULE:        VCS_UART
- * RESPONSIBILITY: UART communication with ANS.
+ * RESPONSIBILITY: UART communication with ANS (Raspberry Pi).
  * DESCRIPTION:   Decodes the custom binary protocol using a state-machine parser.
  * Includes CRC16 validation to ensure command integrity.
  * ============================================================================== */
 
-// Architecture Specific Serial Routing
-#if defined(ARDUINO_ARCH_STM32)
-    #define ANS_SERIAL Serial3 
-#elif defined(ARDUINO_ARCH_NRF52840)
-    #define ANS_SERIAL Serial1 
-#else
-    #define ANS_SERIAL Serial  
-#endif
+#include "vcs_uart.h"
+#include "vcs_hallsensor.h"
+#include "vcs_steering.h"
+#include "vcs_simulation.h"
+
+// Setup ESP32 Hardware Serial 2
+HardwareSerial ANS_SERIAL(2); 
 
 enum UartState { 
     WAIT_START1, WAIT_START2, WAIT_TYPE, WAIT_LEN, WAIT_SEQ, 
@@ -37,7 +34,8 @@ uint16_t calculateCRC16(uint8_t *data, uint8_t length);
 void processCommand(uint8_t msgType, uint8_t *payload, uint8_t length);
 
 void initUART() {
-    ANS_SERIAL.begin(115200);
+    // Initialize UART2 using the specific pins from our config
+    ANS_SERIAL.begin(115200, SERIAL_8N1, PIN_UART_RX, PIN_UART_TX);
     last_valid_packet_time = millis();
 }
 
@@ -139,6 +137,7 @@ uint8_t getTargetBrake() { return target_brake; }
 
 bool rpiHeartbeatReceived() {
     return (millis() - last_valid_packet_time) <= 200;
+    //return true; // TEMP: Always return true for now to avoid E-Stop during testing
 }
 
 void sendTelemetry(float rpm, uint16_t steer, float volt, uint8_t state) {
@@ -174,4 +173,37 @@ void sendTelemetry(float rpm, uint16_t steer, float volt, uint8_t state) {
     ANS_SERIAL.write((crc >> 8) & 0xFF);
     ANS_SERIAL.write(crc & 0xFF);
     ANS_SERIAL.write(0xFF);
+}
+
+void broadcastVehicleTelemetry() {
+    // Standard Packet Header
+    Serial.write(0xAA); 
+    Serial.write(0x05); 
+
+    #if SIMULATION_MODE
+        // --- SENDING SIMULATED SIGNAL ---
+        float rpm = getSimulatedRPM();
+        uint16_t steer = getSimulatedSteering();
+        uint8_t state = (uint8_t)currentState;
+        
+        // --- HUMAN READABLE DEBUG ---
+        Serial.print("SIM DATA -> RPM: ");
+        Serial.print(rpm);
+        Serial.print(" | Steer: ");
+        Serial.println(steer);
+    #else
+        // --- SENDING REAL HARDWARE SIGNAL ---
+        float rpm = getMeasuredRPM();
+        uint16_t steer = getMeasuredSteering();
+        uint8_t state = (uint8_t)currentState;
+
+        // Pack and send actual sensor data
+        Serial.write(highByte((int)rpm));
+        Serial.write(lowByte((int)rpm));
+        Serial.write(highByte(steer));
+        Serial.write(lowByte(steer));
+        Serial.write(state);
+    #endif
+
+    Serial.write(0xFF); // End Byte
 }

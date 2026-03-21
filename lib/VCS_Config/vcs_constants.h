@@ -8,14 +8,15 @@
 // ==========================================
 // System Frequencies & Timing
 // ==========================================
-#define FREQ_SPEED_CTRL_HZ    1000  // Speed PI control loop at 1 kHz
+#define FREQ_SPEED_CTRL_HZ    100   // Speed PI control loop (Reduced to 100Hz, e-bike controller response is mechanical)
 #define FREQ_STEER_CTRL_HZ    100   // Steering PID control loop at 100 Hz
-#define FREQ_PWM_HZ           20000 // Trapezoidal BLDC commutation PWM
-#define DEADTIME_US           50    // 50µs dead-time to prevent shoot-through
+#define THROTTLE_PWM_FREQ     5000  // 5kHz PWM frequency for the RC filter/OpAmp to smooth into analog DC
+#define DEBOUNCE_TIME_MS      50    // 50ms standard debounce for E-Stop and Brake switches
 
 // ==========================================
 // Motor Specifications (Gogo Zion 1000W)
 // ==========================================
+// Kept for RPM calculation from parallel Hall sensor taps
 #define MOTOR_POLE_PAIRS      16    // 16 pole pairs for the motor
 #define HALL_TRANSITIONS_REV  6     // 6 Hall state transitions per electrical revolution
 
@@ -25,8 +26,8 @@
 // Speed PI (Tuned for <5% overshoot, <100ms settling time)
 #define SPEED_KP              1.0f  // TODO: Tune this PI proportional gain
 #define SPEED_KI              0.1f  // TODO: Tune this PI integral gain
-#define MAX_PWM_DUTY          255   // Max 8-bit PWM duty cycle
-#define MIN_PWM_DUTY          0     // Min PWM duty cycle
+#define MAX_PWM_DUTY          255   // Max 8-bit PWM duty cycle (Maps to ~4.2V out of OpAmp)
+#define MIN_PWM_DUTY          0     // Min PWM duty cycle (Maps to ~0.8V out of OpAmp)
 
 // Steering PID (Tuned for <2° steady-state error)
 #define STEER_KP              1.0f  // TODO: Tune this PID proportional gain
@@ -45,20 +46,11 @@
 #define COMM_BRAKE_MAX        100   // Brake full (100%)
 
 // ==========================================
-// Throttle & Low Speed Test Settings 
+// Throttle Ranges (Mapped for ESP32 12-bit ADC)
 // ==========================================
-#define THROTTLE_DEADBAND     30    
-#define THROTTLE_MIN_RUN      170   
-#define THROTTLE_MAX_RUN      512   
-#define MIN_STEP_DELAY        2000  
-#define MAX_STEP_DELAY        800   
-#define FORCED_START_DELAY    2500  
-#define FORCED_START_CYCLES   12    
-
-// ==========================================
-// External Array Declarations
-// ==========================================
-// Verified Hall to Phase Mapping
-extern const uint8_t hall_to_phase_correct[8];
+// Note: ESP32 ADC goes from 0 to 4095
+#define THROTTLE_DEADBAND     150   // Ignore slight pedal touches
+#define THROTTLE_MIN_RUN      400   // ADC value where motor actually starts moving
+#define THROTTLE_MAX_RUN      3800  // Max practical ADC value (ESP32 ADC is non-linear at the very top)
 
 #endif // VCS_CONSTANTS_H

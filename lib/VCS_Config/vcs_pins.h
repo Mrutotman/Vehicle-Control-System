@@ -3,76 +3,47 @@
 
 #include <Arduino.h>
 
-// ==========================================
-// ARCHITECTURE SPECIFIC PIN MAPPINGS
-// ==========================================
+// ==============================================================================
+// MODULE:        VCS_Pins (ESP32 WROOM 38-Pin Only)
+// DESCRIPTION:   Centralized pin definitions mapped directly to system modules.
+// ==============================================================================
 
-#if defined(ARDUINO_ARCH_STM32)
-    // --- STM32F103C8T6 (Blue Pill) ---
-    #define PIN_HALL_U        PB6   // BLDC Motor Hall Sensor Phase U input
-    #define PIN_HALL_V        PB7   // BLDC Motor Hall Sensor Phase V input
-    #define PIN_HALL_W        PB8   // BLDC Motor Hall Sensor Phase W input
-    
-    #define PIN_MOTOR_AH      PA8   // Main BLDC High-Side Gate Drive Phase A
-    #define PIN_MOTOR_BH      PA9   // Main BLDC High-Side Gate Drive Phase B
-    #define PIN_MOTOR_CH      PA10  // Main BLDC High-Side Gate Drive Phase C
-    #define PIN_MOTOR_AL      PB13  // Main BLDC Low-Side Gate Drive Phase A
-    #define PIN_MOTOR_BL      PB14  // Main BLDC Low-Side Gate Drive Phase B
-    #define PIN_MOTOR_CL      PB15  // Main BLDC Low-Side Gate Drive Phase C
-    
-    #define PIN_STEER_POT     PA0   // 10-turn Potentiometer (Steering angle feedback)
-    #define PIN_STEER_PUL     PA6   // Stepper Driver PULSE signal (Speed/Steps)
-    #define PIN_STEER_ENA     PB1   // Stepper Driver ENABLE signal (Auto-Lock/Manual-Free)
-    #define PIN_STEER_DIR     PA5   // Stepper Driver DIRECTION signal (Left/Right)
-    
-    #define PIN_ESTOP_BRAKE   PA7   // Hardware Emergency Brake Actuator/Relay output
-    
-    #define PIN_THROTTLE      PA1   // Throttle Pedal/Input analog signal
-    #define PIN_BRAKE_SW      PA11  // New: Digital Brake Pedal Switch (HIGH = Pressed, LOW = Released)
-    #define PIN_RC_MODE_SW    PA4   // RC Controller Switch (Auto/Manual/Idle states)
-    #define PIN_ESTOP_BTN     PB12  // Physical Emergency Stop Button input
-    
-    #define PIN_CURRENT_SENS  PA2   // Main Power Current Sensor analog input
-    #define PIN_VOLTAGE_SENS  PA3   // Main Battery Voltage Divider analog input
-    #define PIN_TEMP_SENS     PB0   // Motor/Heatsink Temperature Sensor analog input
-    
-    #define PIN_UART_RX       PB11  // Serial RX (Communication from Raspberry Pi)
-    #define PIN_UART_TX       PB10  // Serial TX (Communication to Raspberry Pi)
+// --- VCS_Displays ---
+#define PIN_OLED_SDA          21  // I2C SDA for OLED Screen
+#define PIN_OLED_SCL          22  // I2C SCL for OLED Screen
+#define PIN_LED_STATUS        14  // External LED 1: System Status
+#define PIN_LED_FAULT         12  // External LED 2: Fault/E-Stop (Boot Strapping Pin - Keep Pulled Low)
+#define PIN_LED_MODE          2   // External LED 3: Mode indicator (Boot Strapping Pin - Keep Pulled Low)
 
-#elif defined(ARDUINO_ARCH_NRF52840) || defined(ARDUINO_ARCH_AVR)
-    // --- Arduino Nano 33 BLE & Standard 8-bit Nano ---
-    #define PIN_HALL_U        2     // BLDC Motor Hall Sensor Phase U input
-    #define PIN_HALL_V        3     // BLDC Motor Hall Sensor Phase V input
-    #define PIN_HALL_W        4     // BLDC Motor Hall Sensor Phase W input
-    
-    #define PIN_MOTOR_AH      9     // Main BLDC High-Side Gate Drive Phase A
-    #define PIN_MOTOR_BH      10    // Main BLDC High-Side Gate Drive Phase B
-    #define PIN_MOTOR_CH      11    // Main BLDC High-Side Gate Drive Phase C
-    #define PIN_MOTOR_AL      6     // Main BLDC Low-Side Gate Drive Phase A
-    #define PIN_MOTOR_BL      7     // Main BLDC Low-Side Gate Drive Phase B
-    #define PIN_MOTOR_CL      8     // Main BLDC Low-Side Gate Drive Phase C
-    
-    #define PIN_STEER_POT     A3    // 10-turn Potentiometer (Steering angle feedback)
-    #define PIN_STEER_DIR     12    // Stepper Driver DIRECTION signal (Left/Right)
-    #define PIN_ESTOP_BTN     13    // Physical Emergency Stop Button input
-    
-    #define PIN_THROTTLE      A2    // Throttle Pedal/Input analog signal
-    #define PIN_BRAKE_SW      A7   // New: Digital Brake Pedal Switch (HIGH = Pressed, LOW = Released)
-    #define PIN_RC_MODE_SW    A4    // RC Controller Switch (Auto/Manual/Idle states)
-    
-    #define PIN_CURRENT_SENS  A0    // Main Power Current Sensor analog input
-    #define PIN_VOLTAGE_SENS  A1    // Main Battery Voltage Divider analog input
-    #define PIN_TEMP_SENS     A5    // Motor/Heatsink Temperature Sensor analog input
-    
-    #define PIN_STEER_PUL     5     // Stepper Driver PULSE signal (Speed/Steps)
-    #define PIN_STEER_ENA     A6    // Stepper Driver ENABLE signal (Auto-Lock/Manual-Free)
-    #define PIN_ESTOP_BRAKE   5     // Hardware Emergency Brake Actuator/Relay output
-    
-    #define PIN_UART_RX       0     // Serial RX (Communication from Raspberry Pi)
-    #define PIN_UART_TX       1     // Serial TX (Communication to Raspberry Pi)
+// --- VCS_Comm ---
+#define PIN_UART_RX           16  // Hardware Serial RX2 (Connected to RPi TX)
+#define PIN_UART_TX           17  // Hardware Serial TX2 (Connected to RPi RX)
 
-#else
-    #error "Unsupported Architecture Selected in PlatformIO!"
-#endif
+// --- VCS_Actuators ---
+#define PIN_THROTTLE_IN       36  // Input: Physical Throttle Pedal (Analog VP Pin)
+#define PIN_THROTTLE_OUT      18  // Output: PWM -> RC Filter/OpAmp -> Controller
+#define PIN_LOWBRAKE_IN       4   // Input: Physical Brake Switch (Use INPUT_PULLUP)
+#define PIN_LOWBRAKE_OUT      5   // Output: To Optocoupler -> Controller Low Brake wire
+#define PIN_EMBUTTON          13  // Input: Emergency Stop Button (Use INPUT_PULLUP)
+#define PIN_DMS_BUTTON        25  // Input: Driver Monitoring System Button (Use INPUT_PULLUP)
+
+// --- VCS_Speed (Speed Control) ---
+#define PIN_SPEED_SW_LOW      25  // Input: Physical 3-Pos Switch (Low Position)
+#define PIN_SPEED_SW_HIGH     0   // Input: Physical 3-Pos Switch (High Position) - Note: Boot Strapping Pin
+#define PIN_SPEED_LOW         19  // Output: To Optocoupler -> 3-Speed Low wire
+#define PIN_SPEED_HIGH        23  // Output: To Optocoupler -> 3-Speed High wire
+
+// --- VCS_Steering ---
+#define PIN_STEER_PUL         26  // Output: Stepper Pulse
+#define PIN_STEER_DIR         27  // Output: Stepper Direction
+#define PIN_STEER_ENA         32  // Output: Stepper Enable
+#define PIN_STEER_POT         34  // Input: 10-turn Potentiometer Analog Feedback (Input Only)
+
+// --- VCS_Hall (Parallel Signals) ---
+// NOTE: These are 5V/Battery signals. MUST use voltage dividers to drop to 3.3V!
+#define PIN_HALL_SPEED        35  // Input: Tapped in parallel from Green Dashboard wire (Input Only)
+#define PIN_HALL_U            39  // Input: Tapped in parallel from Motor Phase U (VN Pin)
+#define PIN_HALL_V            33  // Input: Tapped in parallel from Motor Phase V
+#define PIN_HALL_W            15  // Input: Tapped in parallel from Motor Phase W
 
 #endif // VCS_PINS_H

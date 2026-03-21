@@ -1,230 +1,110 @@
 #include <Arduino.h>
-
-// Include all VCS modules
+#include <esp_task_wdt.h>
 #include "vcs_pins.h"
 #include "vcs_constants.h"
-#include "vcs_hall.h"
-#include "vcs_commutation.h"
-#include "vcs_speed_controller.h"
-#include "vcs_steering.h"
-#include "vcs_uart.h"
 #include "vcs_state_machine.h"
-#include "vcs_safety.h"
-#include "vcs_brake.h"
-uint8_t current_pwm_duty = 0;
-bool debugModeActive = true; // Set to true to see text, false for RPi hex
-void printTelemetryAsText(float rpm, int steer, float voltage, uint8_t state);
+#include "vcs_uart.h"
+#include "vcs_throttle.h"
+#include "vcs_lowbrake.h"
+#include "vcs_embutton.h"
+#include "vcs_steering.h"
+#include "vcs_hallsensor.h"
+#include "vcs_threespeed.h"
+#include "vcs_display.h"
 
+// Task Handles
+TaskHandle_t ControlTaskHandle;
+TaskHandle_t CommTaskHandle;
+TaskHandle_t UITaskHandle;
 
-// ==============================================================================
-// 1. FREERTOS IMPLEMENTATION (For Arduino Nano 33 BLE)
-// ==============================================================================
-#if defined(ARDUINO_ARCH_NRF52840)
+// --- 1. CONTROL TASK (1 kHz / 1 ms) ---
+// Runs on Core 1 to stay away from WiFi/BT/UART interrupts
+void ControlTask(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1ms for 1kHz
 
-// The Nano 33 BLE uses Mbed OS. 
-// We use the Mbed Threading and Ticker APIs which fulfill the SIDLAK RTOS requirement.
-#include "mbed.h"
-#include "rtos.h"
-#include "vcs_state_machine.h" // Ensure this is included to use isAutonomousMode()
+    for (;;) {
+        // Precise timing for Speed PI
+        updateHallCalculations();
+        updateThrottle(getMeasuredRPM(), getTargetRPM());
 
-using namespace std::chrono;
-using namespace mbed;
-using namespace rtos;
-
-// We use Mbed Threads instead of xTaskCreate
-Thread threadSpeedControl;
-Thread threadSteeringSafety;
-Thread threadUART;
-
-void taskSpeedControl() {
-    while (true) {
-        if (currentState == AUTONOMOUS_STATE) {
-            current_pwm_duty = updateSpeedController(getTargetRPM(), getMechanicalRPM());
-        } else if (currentState == MANUAL_STATE) {
-            int throttle = analogRead(PIN_THROTTLE);
-            current_pwm_duty = (throttle > THROTTLE_MIN_RUN) ? 
-                map(throttle, THROTTLE_MIN_RUN, THROTTLE_MAX_RUN, MIN_PWM_DUTY, MAX_PWM_DUTY) : 0;
-            current_pwm_duty = constrain(current_pwm_duty, MIN_PWM_DUTY, MAX_PWM_DUTY);
-        } else {
-            current_pwm_duty = 0;
-            initSpeedController();
+        // Steering runs every 10th cycle (100Hz)
+        static uint8_t steerDivider = 0;
+        if (++steerDivider >= 10) {
+            updateSteeringPID(getTargetSteering(), isAutonomousMode());
+            steerDivider = 0;
         }
-        ThisThread::sleep_for(1ms); // 1 kHz
-    }
-}
 
-void taskSteeringAndSafety() {
-    while (true) {
-        updateStateMachine();
+        // Reset the Task Watchdog for this specific task
+        esp_task_wdt_reset();
         
-        // Grab the auto state to determine if the stepper shaft should be locked or free
-        bool auto_mode = isAutonomousMode();
-
-        if (currentState == AUTONOMOUS_STATE) {
-            updateSteeringPID(getTargetSteering(), auto_mode);
-            applyBrake(getTargetBrake());
-        } else if (currentState == MANUAL_STATE) {
-            updateSteeringPID(COMM_STEER_CENTER, auto_mode); 
-            applyBrake(0);
-        } else {
-            applyBrake(100); 
-            updateSteeringPID(getMeasuredSteering(), auto_mode); 
-        }
-        resetHardwareWatchdog();
-        ThisThread::sleep_for(10ms); // 100 Hz
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
 
-void taskUARTComms() {
-    while (true) {
-        updateUART();
-        ThisThread::sleep_for(50ms); // 20 Hz
+// --- 2. COMM & STATE TASK (100 Hz / 10 ms) ---
+void CommTask(void *pvParameters) {
+    for (;;) {
+        updateUART(); // Read from Pi
+        updateStateMachine(0); // Audit system state
+        updateLowBrake(); // Manage safety brake
+        
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// --- 3. UI & TELEMETRY TASK (10 Hz / 100 ms) ---
+void UITask(void *pvParameters) {
+    for (;;) {
+        // Send telemetry to Pi at 20Hz
+        broadcastVehicleTelemetry();
+
+        // Update the physical OLED
+        updateDisplay(getMeasuredRPM(), getMeasuredSteering(), getRPiCommandMode());
+
+        vTaskDelay(pdMS_TO_TICKS(50)); 
     }
 }
 
 void setup() {
-    initSafety();
-    initBrake();
-    initCommutation();
-    initHallSensors();
-    initSpeedController();
-    initSteering();
-    initUART();
+    Serial.begin(115200);
+    delay(1000); // Give the serial monitor time to connect
+    Serial.println("--- VCS SYSTEM BOOTING ---");
+
+    // 1. Hardware Init (Serial, Pins, I2C)
+
+    // Initializing high-level architecture
     initState_Machine();
-
-    // Start Mbed Threads
-    threadSpeedControl.start(taskSpeedControl);
-    threadSteeringSafety.start(taskSteeringAndSafety);
-    threadUART.start(taskUARTComms);
-}
-
-void loop() {}
-
-// ==============================================================================
-// 2. MICROS() SCHEDULER IMPLEMENTATION (For STM32 and 8-bit Nano)
-// ==============================================================================
-#else
-
-// Timing tracking
-uint32_t last_1kHz_us = 0;
-uint32_t last_100Hz_us = 0;
-uint32_t last_10Hz_us = 0;
-uint32_t last_20Hz_us = 0;
-uint8_t last_hall_state = 0;
-
-void setup() {
-    initSafety();
-    initBrake();
-    initCommutation();
-    initHallSensors();
-    initSpeedController();
-    initSteering();
     initUART();
-    initState_Machine();
+    
+    // Actuators & Drive Logic
+    initThrottle();
+    initLowBrake();
+    initEmButton();
+    initSteering();
+    initHallSensors();
+    initThreeSpeed();
+    initDisplay();
+
+    // 2. Initialize Task Watchdog (WDT)
+    esp_task_wdt_init(2, true); // 2 second timeout
+
+    // 3. Create Tasks
+    xTaskCreatePinnedToCore(
+        ControlTask, "Control", 4096, NULL, 10, &ControlTaskHandle, 1);
+    
+    xTaskCreatePinnedToCore(
+        CommTask, "Comm", 4096, NULL, 5, &CommTaskHandle, 0);
+
+    xTaskCreatePinnedToCore(
+        UITask, "UI", 4096, NULL, 1, &UITaskHandle, 0);
+
+    // Add the most critical task to the watchdog
+    esp_task_wdt_add(ControlTaskHandle);
 }
 
 void loop() {
-    uint32_t current_us = micros();
-
-    // 1. Always update the state machine first
-    updateStateMachine();
-    
-    // 2. Get the current target position (from RC or RPi depending on state)
-    uint16_t target_steer = getTargetSteering(); // Assuming you have a function like this
-    
-    // 3. Check the state and update the steering motor
-    bool auto_mode = isAutonomousMode(); 
-    
-    // If auto_mode is true: Stepper is Locked & Active.
-    // If auto_mode is false: Stepper is Unlocked & Power Saving.
-    updateSteeringPID(target_steer, auto_mode);
-
-    // FASTEST LOOP: Run continuously to catch state changes
-    uint8_t hall = getHallState();
-    if (hall != last_hall_state) {
-        last_hall_state = hall;
-        if ((currentState == AUTONOMOUS_STATE || currentState == MANUAL_STATE) && (hall > 0 && hall < 7)) {
-            uint8_t phase = hall_to_phase_correct[hall] - 1;
-            applyDeadtime();
-            commutatePhase(phase, current_pwm_duty);
-        } else {
-            allPhasesOff();
-        }
-    }
-
-    // 1 kHz TASK: Speed PI Control
-    if (current_us - last_1kHz_us >= 1000) {
-        last_1kHz_us = current_us;
-        if (currentState == AUTONOMOUS_STATE) {
-            current_pwm_duty = updateSpeedController(getTargetRPM(), getMechanicalRPM());
-        } else if (currentState == MANUAL_STATE) {
-            int throttle = analogRead(PIN_THROTTLE);
-            current_pwm_duty = (throttle > THROTTLE_MIN_RUN) ? 
-                map(throttle, THROTTLE_MIN_RUN, THROTTLE_MAX_RUN, MIN_PWM_DUTY, MAX_PWM_DUTY) : 0;
-            current_pwm_duty = constrain(current_pwm_duty, MIN_PWM_DUTY, MAX_PWM_DUTY);
-        } else {
-            current_pwm_duty = 0;
-            initSpeedController();
-        }
-    }
-
-    // 10 Hz TASK: Datalogging / Telemetry
-    static uint32_t last_10Hz_ms = 0;
-    if (millis() - last_10Hz_ms >= 100) {
-        last_10Hz_ms = millis();
-
-        float current_v = getBatteryVoltage();
-
-        if (debugModeActive) {
-            printTelemetryAsText(getMechanicalRPM(), getMeasuredSteering(), current_v, currentState);
-        } else {
-            sendTelemetry(getMechanicalRPM(), getMeasuredSteering(), current_v, currentState);
-        }
-    }
-
-    // 100 Hz TASK: Steering, Safety, & Watchdog
-    if (current_us - last_100Hz_us >= 10000) {
-        last_100Hz_us = current_us;
-        updateStateMachine();
-        
-        if (currentState == AUTONOMOUS_STATE) {
-            updateSteeringPID(getTargetSteering(), isAutonomousMode());;
-            applyBrake(getTargetBrake());
-        } else if (currentState == MANUAL_STATE) {
-            updateSteeringPID(COMM_STEER_CENTER, isAutonomousMode());;
-            applyBrake(0);
-        } else {
-            applyBrake(100);
-            updateSteeringPID(getMeasuredSteering(), isAutonomousMode());
-        }
-        resetHardwareWatchdog();
-    }
-
-    // 20 Hz TASK: UART Comms
-    if (current_us - last_20Hz_us >= 50000) {
-        last_20Hz_us = current_us;
-        updateUART();
-    }
+    // In FreeRTOS, the Arduino loop() is a low-priority task. 
+    // We leave it empty or use it for background system monitoring.
+    vTaskDelete(NULL); 
 }
-
-void printTelemetryAsText(float rpm, int steer, float voltage, uint8_t state) {
-    Serial.print(F("--- VCS DATA ---"));
-    Serial.print(F("\nSTATE:   ")); Serial.print(state);
-    
-    // Add text labels for the states
-    switch(state) {
-        case 0: Serial.print(F(" (INIT)")); break;
-        case 1: Serial.print(F(" (IDLE)")); break;
-        case 4: Serial.print(F(" (ESTOP)")); break;
-        case 5: Serial.print(F(" (FAULT)")); break;
-        default: Serial.print(F(" (UNKNOWN)")); break;
-    }
-
-    Serial.print(F("\nRPM:     ")); Serial.print(rpm);
-    Serial.print(F("\nSTEER:   ")); Serial.print(steer);
-    Serial.print(F("\nBATTERY: ")); Serial.print(voltage); 
-    Serial.println(F("V"));
-    Serial.println(F("----------------\n"));
-}
-
-#endif
