@@ -4,7 +4,12 @@
  * ============================================================================== */
 
 #include "vcs_threespeed.h"
+#include "vcs_pins.h"
 #include "vcs_state_machine.h"
+#include "vcs_constants.h"
+#include "vcs_uart.h" // For RPi command access in Autonomous mode
+
+uint8_t current_drive_mode = 1; // Default to Medium on boot
 
 void initThreeSpeed() {
     pinMode(PIN_SPEED_SW_LOW, INPUT);

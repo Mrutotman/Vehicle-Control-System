@@ -1,47 +1,45 @@
-/* ==============================================================================
- * MODULE:        VCS_LowBrake
- * RESPONSIBILITY: Electronic Brake Actuation & Monitoring.
- * DESCRIPTION:   Reads the physical brake lever switch and controls the optocoupler
- * connected to the e-bike controller's Low Level Brake wire.
- * On system boot or during an E-Stop, this module defaults to 
- * ENGAGED for hardware-level safety.
- * ============================================================================== */
-
 #include "vcs_lowbrake.h"
+#include "vcs_pins.h"
+#include "vcs_constants.h" // Ensures we have access to DEBOUNCE_TIME_MS
 
-bool physicalBrakeState = false;
+// Global Telemetry Variable
+bool is_brake_pressed = false;
+
+// Internal state tracking for the debounce logic
+static uint32_t lastDebounceTime = 0;
+static int lastButtonState = HIGH; 
 
 void initLowBrake() {
     // Configure inputs and outputs
-    pinMode(PIN_LOWBRAKE_IN, INPUT_PULLUP); // Assuming the switch pulls to ground
+    pinMode(PIN_LOWBRAKE_IN, INPUT_PULLUP); 
     pinMode(PIN_LOWBRAKE_OUT, OUTPUT);
     
-    // Engage brake fully on boot for safety (Migrated from original code)
+    // Engage brake fully on boot for hardware-level safety
     forceBrakeEngagement(true); 
 }
 
 void updateLowBrake() {
-    // 1. Read the physical pedal switch with standard debounce
-    static uint32_t lastDebounceTime = 0;
-    static bool lastReading = HIGH;
+    // --- 1. DEBOUNCE LOGIC ---
+    int reading = digitalRead(PIN_LOWBRAKE_IN);
     
-    bool currentReading = digitalRead(PIN_LOWBRAKE_IN);
-    
-    if (currentReading != lastReading) {
+    // Reset the debounce timer if the state changed (noise or physical press)
+    if (reading != lastButtonState) {
         lastDebounceTime = millis();
     }
     
+    // If the state has been stable longer than the debounce delay
     if ((millis() - lastDebounceTime) > DEBOUNCE_TIME_MS) {
         // Active LOW: If the pin is grounded, the brake is pressed
-        physicalBrakeState = (currentReading == LOW);
+        is_brake_pressed = (reading == LOW);
     }
-    lastReading = currentReading;
     
-    // 2. Hardware-level Safety Fallback: 
-    // If the human presses the physical brake, fire the optocoupler immediately,
-    // bypassing the state machine for instant response.
-    if (physicalBrakeState) {
-        digitalWrite(PIN_LOWBRAKE_OUT, HIGH); // HIGH triggers the optocoupler
+    lastButtonState = reading;
+    
+    // --- 2. INSTANT HARDWARE OVERRIDE ---
+    // If the human presses the physical brake, fire the optocoupler immediately.
+    // This bypasses the state machine entirely for zero-latency stopping.
+    if (is_brake_pressed) {
+        digitalWrite(PIN_LOWBRAKE_OUT, HIGH); 
     }
 }
 
@@ -50,13 +48,13 @@ void forceBrakeEngagement(bool engage) {
         digitalWrite(PIN_LOWBRAKE_OUT, HIGH); // Force trigger optocoupler
     } else {
         // SECURITY CHECK: Only allow the state machine to release the software brake 
-        // if the human is NOT currently holding down the physical brake pedal.
-        if (!physicalBrakeState) {
+        // if the human driver is NOT currently holding down the physical brake pedal.
+        if (!is_brake_pressed) {
             digitalWrite(PIN_LOWBRAKE_OUT, LOW);
         }
     }
 }
 
 bool isPhysicalBrakePressed() {
-    return physicalBrakeState;
+    return is_brake_pressed;
 }

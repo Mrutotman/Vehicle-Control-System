@@ -1,38 +1,35 @@
 # 🏎️ VCS: Vehicle Control System (Shell Eco-marathon Edition)
 
-The **Vehicle Control System (VCS)** is a closed-loop, RTOS-driven control architecture designed specifically for the **Shell Eco-marathon (SEM)** competition. It serves as the high-reliability bridge between high-level navigation (Raspberry Pi) and high-power execution ($60\text{V}$ BLDC Motor and Stepper-based Steering).
+The **Vehicle Control System (VCS)** is a closed-loop, RTOS-driven control architecture designed specifically for the **Shell Eco-marathon (SEM)** competition. It serves as the high-reliability bridge between high-level navigation (Raspberry Pi) and high-power execution (1500W BLDC Motor and Stepper-based Steering).
 
 ## 🤖 AI Collaboration
-This system was architected and refined in collaboration with **Gemini 3 Flash**. The collaboration focused on:
-* Transitioning from monolithic code to a **Modular Architecture**.
-* Implementing **Hardware-in-the-Loop (HIL) Simulation** for safe bench testing without $60\text{V}$ power.
-* Integrating **SEM-compliant safety protocols** (DMS, Heartbeat, and Brake Overrides).
+This system was architected and refined in collaboration with **Gemini 3.1 Pro**. The collaboration focused on:
+* Transitioning from monolithic ESP32 code to a **Deterministic Mbed OS Thread Architecture** on the Arduino Nano 33 BLE.
+* Implementing **Hardware-in-the-Loop (HIL) Simulation** for safe bench testing without 60V power.
+* Integrating **SEM-compliant safety protocols** (Hardware Watchdog, DMS, Heartbeat, and Optocoupler Overrides).
 
 ---
 
 ## 🚀 Version History
 
-### **v1.3 and v1.2 (Current - 1500W Motor Driver & HIL Sim)**
-*The "Reliability" release. Focuses on standardized hardware and digital twin verification.*
+### **v1.3 (Current - Nano 33 BLE, 1500W Driver & Mbed OS)**
+*The "Reliability" release. Focuses on strict thread timing, standard hardware, and digital twin verification.*
 * **Powertrain Upgrade:** Optimized for **1500W prebuilt e-bike BLDC motor drivers**, removing the instability of DIY commutation logic.
-* **Full Digital Twin Integration:** Physics-based simulation module (`VCS_Simulation`) to emulate vehicle dynamics without 60V power.
-* **High-Speed Binary Telemetry:** 20Hz Uplink protocol (`0xAA` frames) for real-time Raspberry Pi monitoring.
-* **Telemetry Heartbeat Logic:** State machine requires a validated "Brain-to-Heart" handshake before entering Autonomous mode.
-* **Simplified Safety Path:** Streamlined the safety hierarchy for faster response times using prebuilt driver logic.
+* **Mbed OS RTOS:** Split execution into strict 1kHz (Control), 100Hz (Comm), and 20Hz (UI) threads.
+* **Hardware Watchdog:** Integrated the nRF52840 hardware watchdog to enforce SEM safety rules.
+* **Full Digital Twin Integration:** Physics-based simulation module (`vcs_simulation`) to emulate vehicle dynamics and payload parsing without 60V power.
+* **High-Speed Binary Telemetry:** CRC16-validated Uplink/Downlink protocol for real-time Raspberry Pi monitoring.
 
-### **v1.1 (Current - Modular ESP32/STM32)**
+### **v1.1 & v1.2 (Legacy - ESP32/STM32)**
 *Major upgrade focusing on steering precision, power management, and SEM technical compliance.*
 * **Stepper Steering:** Replaced legacy DC motors with high-torque microstep drivers.
 * **Smart Shaft Locking:** Integrated `ENA` logic to manage holding torque, reducing current draw to **0.4A** during manual idle to conserve battery.
-* **Strict Timing:** Enforced a $35\mu\text{s}$ step delay limit to prevent motor vibration.
-* **Digital Twin Sim:** Added `VCS_Simulation` to test UART telemetry and safety logic without engaging the $60\text{V}$ rail.
-* **Multi-Architecture ADC Mapping:** Auto-scales feedback between 12-bit (STM32/ESP32) and 10-bit (AVR) hardware.
+* **Multi-Architecture ADC Mapping:** Auto-scales feedback between 12-bit (STM32/ESP32) and 10-bit hardware.
 
 ### **v1.0 (Legacy - Prototype)**
 *Initial prototype build focusing on core connectivity.*
 * **DC Motor Steering:** Basic PWM/DIR control via H-Bridge.
 * **Core State Machine:** First draft of the SIDLAK state transitions.
-* **Direct Logic:** Monolithic loop structure without modular isolation.
 
 ---
 
@@ -41,79 +38,73 @@ The system utilizes a strict priority hierarchy. Motor power is strictly prohibi
 
 | State | SEM Requirement | Description |
 | :--- | :--- | :--- |
-| **INIT** | Self-Test | Boot sequence and internal hardware health check. |
+| **INIT** | Self-Test | Boot sequence, optocoupler lockout, and internal hardware health check. |
 | **IDLE** | Safety Standby | System alive but motor disabled; awaiting RPi heartbeat. |
-| **MANUAL** | Human Control | Driver-operated via throttle and steering. |
-| **AUTONOMOUS** | Computer Control | Requires **active DMS hold** and RPi communication. |
-| **FAULT** | Fail-Safe | Triggered by comms loss or sensor spikes. **Instant Motor Kill.** |
+| **MANUAL** | Human Control | Driver-operated via throttle pedal and steering wheel. |
+| **AUTONOMOUS** | Computer Control | Requires **active DMS hold** and verified 10Hz RPi communication. |
+| **FAULT** | Fail-Safe | Triggered by comms loss, CRC failures, or sensor spikes. **Instant Motor Kill.** |
 | **ESTOP** | Emergency Stop | Physical hardware lockout; requires hard power cycle. |
 
 ---
 
 ## 🛠️ System Modules
-The project follows a modular structure to ensure maintainability and safety isolation.
+The project follows a modular C++ structure to ensure maintainability and safety isolation.
 
-* **`VCS_Actuators`**: Directly controls the throttle PWM and motor controller interfacing.
-* **`VCS_Comm`**: Manages the custom binary UART protocol for Pi-to-ESP32 communication.
-* **`VCS_Config`**: Centralized hub for pin mappings, PID constants, and safety thresholds.
-* **`VCS_Display`**: Drives the $128 \times 64$ I2C OLED for live telemetry/ and 3 LED indicators.
-* **`VCS_Hall`**: Uses hardware interrupts to calculate RPM for speed feedback.
-* **`VCS_Simulation`**: Physics engine for testing logic without physical hardware.
-* **`VCS_Speed`**: Manages the physical 3-speed toggle and software power-limiting.
-* **`VCS_Steering`**: Closed-loop QuickPID system for front-wheel stepper control.
-* **`VCS_System`**: The core SIDLAK State Machine; manages transitions and safety.
+* **`vcs_throttle` / `vcs_steering`**: QuickPID-driven actuator control mapped to 10-bit limits.
+* **`vcs_uart`**: Manages the `0xAA 0x55` binary UART protocol with strict CRC16 validation.
+* **`vcs_state_machine`**: The core SIDLAK architecture; manages transitions and Watchdog feeding.
+* **`vcs_lowbrake` / `vcs_embutton`**: Zero-latency hardware interrupt overrides for safety.
+* **`vcs_display`**: Drives the 128x64 I2C OLED for live telemetry and 3-LED status indicators.
+* **`vcs_hallsensor`**: Mbed OS hardware interrupts for parallel RPM tapping.
+* **`vcs_simulation`**: Physics engine for testing RPi autonomy without physical motors attached.
 
 ---
 
-## 🔌 Hardware Setup (ESP32 WROOM 38-Pin)
+## 🔌 Hardware Setup (Arduino Nano 33 BLE)
 
-### Control & Actuators
-| Component | Pin | Function | Logic/Note |
-| :--- | :--- | :--- | :--- |
-| **DMS Button** | GPIO 25 | Input | Dead Man's Switch (Active Low) |
-| **Brake Switch**| GPIO 4  | Input | Manual Override (Active Low) |
-| **E-Stop** | GPIO 13 | Input | Emergency Hardware Shutdown |
-| **Steer PUL** | GPIO 26 | Output | Step Pulses (PUL-) |
-| **Steer DIR** | GPIO 27 | Output | Direction (DIR-) |
-| **Steer ENA** | GPIO 32 | Output | Enable/Lock (ENA-) |
-| **Throttle Out**| GPIO 18 | Output | To Motor Controller PWM |
+### Control & Actuation (3.3V Logic to 1500W Driver)
+* **DMS Button:** Pin D2 (Input Pullup)
+* **Brake Switch:** Pin D3 (Input Pullup - Primary Override)
+* **E-Stop:** Pin D4 (Input Pullup)
+* **Steer PUL/DIR/ENA:** Pins D5, D6, D7
+* **Throttle Out:** Pin D9 (10-bit PWM mapped to Optocoupler/RC Filter)
 
-### Sensors & Communication
-| Component | Pin | Function | Note |
-| :--- | :--- | :--- | :--- |
-| **Steer POT** | GPIO 34 | Analog In | 10-Turn Pot Wiper (Input Only) |
-| **UART RX2** | GPIO 16 | Comm | Connected to RPi TX |
-| **UART TX2** | GPIO 17 | Comm | Connected to RPi RX |
-| **Hall Speed** | GPIO 35 | RPM In | Tapped from Dashboard (Input Only) |
-| **OLED SDA** | GPIO 21 | I2C | SSD1306 Data |
-| **OLED SCL** | GPIO 22 | I2C | SSD1306 Clock |
+### Telemetry & Sensing
+* **Steer Pot:** Pin A0 (Analog Precision Feedback - 10-bit)
+* **UART1 (To RPi):** TX (Pin D1) / RX (Pin D0) at 115200 Baud
+* **Hall Speed:** Pin D10 (Parallel tap from driver dashboard wire)
+* **OLED (I2C):** SDA (Pin A4) / SCL (Pin A5)
 
 ---
 
-## 📡 Communication Protocol
+## 📡 Communication Protocol (v1.3 CRC16)
 
-### **Uplink (ESP32 → Pi)**
-**Format:** `[0xAA][TYPE][RPM_H][RPM_L][STEER_H][STEER_L][STATE][BATT][0xFF]`
-* **RPM/Steer**: 16-bit Unsigned Integers (Big-Endian).
-* **State**: Current SIDLAK State index for Pi-side monitoring.
+All packets feature a strict two-byte start header and a two-byte CRC16 validation.
 
-### **Downlink (Pi → ESP32)**
-**Format:** `[0xBB][MODE][THROTTLE][STEER_H][STEER_L][CRC][0xFF]`
+### **Uplink (Nano 33 BLE → Pi) - Telemetry**
+**Format:** `[0xAA][0x55][0x02][0x09][RPM(4)][STEER(2)][VOLT(2)][STATE(1)][CRC(2)][0xFF]`
+* **RPM**: 32-bit Integer (Scaled).
+* **Steer/Volt**: 16-bit Unsigned Integers.
+* **State**: Current SIDLAK State index.
+
+### **Downlink (Pi → Nano 33 BLE) - Command**
+**Format:** `[0xAA][0x55][0x01][Len][MODE][SPEED(2)][STEER(2)][BRAKE(1)][CRC(2)][0xFF]`
 * **Mode**: 1 = Request Autonomous, 0 = Force Manual.
-* **Steer**: Target position on a 0-1000 scale.
+* **Speed/Steer**: 16-bit target values bounded by `vcs_constants.h`.
 
 ---
 
 ## 💻 Building and Testing (HIL Simulation)
-To test the system logic safely without $60\text{V}$ power:
-1. Open `include/vcs_simulation.h` and set `#define SIMULATION_MODE true`.
-2. Upload via PlatformIO and open the Serial Monitor (**115200 baud**).
-3. Ground **GPIO 25** (DMS) for 1 second to observe the transition to **AUTONOMOUS**.
-4. Ground **GPIO 4** (Brake) to verify instant override back to **MANUAL**.
+To test the system logic safely without 60V power:
+1. Open `vcs_constants.h` and set `#define SIMULATION_MODE 1`.
+2. Connect the Nano 33 BLE via USB, build via **PlatformIO**, and open the Serial Monitor.
+3. Ground the **DMS Pin (e.g., D2)** to simulate the driver holding the dead-man switch to observe the transition to **AUTONOMOUS**.
+4. Ground the **Brake Pin (e.g., D3)** to verify the optocoupler fires and the state machine instantly overrides back to **MANUAL**.
 
 ---
 
 ## 📚 Libraries Used
-* **QuickPID:** For high-performance, low-jitter steering control.
-* **Adafruit SSD1306 / GFX:** For onboard OLED telemetry visualization.
-* **Arduino Core:** Base framework for ESP32/STM32 compatibility.
+* **Mbed OS (`mbed.h`)**: Native ARM threading, sleep timings, and hardware Watchdog.
+* **QuickPID**: High-performance, low-jitter PID calculations synced to microsecond threads.
+* **Adafruit SSD1306 / GFX**: For onboard OLED telemetry visualization.
+* **Arduino Core**: Base framework for Nano 33 BLE compatibility.

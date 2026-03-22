@@ -2,15 +2,17 @@
 #define VCS_LOWBRAKE_H
 
 #include <Arduino.h>
-#include "vcs_pins.h"
-#include "vcs_constants.h"
 
-// Core initialization and loop functions
+// Global Telemetry Variable for State Machine & UART
+extern bool is_brake_pressed;
+
 void initLowBrake();
-void updateLowBrake(); 
+void updateLowBrake();
 
-// Interfaces for the State Machine
-void forceBrakeEngagement(bool engage); 
-bool isPhysicalBrakePressed(); 
+// Allows the State Machine to lock the brakes during FAULT/INIT
+void forceBrakeEngagement(bool engage);
+
+// Helper function
+bool isPhysicalBrakePressed();
 
 #endif // VCS_LOWBRAKE_H

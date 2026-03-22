@@ -1,25 +1,25 @@
 #include "vcs_embutton.h"
-#include "vcs_pins.h"
-#include "vcs_constants.h" // Ensure DEBOUNCE_TIME_MS is defined here
+
+// Global Telemetry Variable
+bool is_estop_pressed = false;
 
 void initEmButton() {
-    pinMode(PIN_EMBUTTON, INPUT_PULLUP); 
+    // Standard E-Stops are Normally Closed (NC) to ground for safety.
+    // We use INPUT_PULLUP so if the wire breaks, it triggers an E-Stop automatically.
+    pinMode(PIN_EMBUTTON, INPUT_PULLUP);
+    
+    // Initial read
+    is_estop_pressed = (digitalRead(PIN_EMBUTTON) == LOW);
 }
 
-// Rename this to match what the State Machine is calling!
+void updateEmButton() {
+    // Update the telemetry variable for the UART broadcast
+    is_estop_pressed = (digitalRead(PIN_EMBUTTON) == LOW);
+}
+
 bool isEmButtonPressed() {
-    static uint32_t lastDebounce = 0;
-    static bool estopState = false;
-    
-    // Check if button is pushed (Active LOW)
-    if (digitalRead(PIN_EMBUTTON) == LOW) { 
-        if (millis() - lastDebounce > DEBOUNCE_TIME_MS) {
-            estopState = true;
-        }
-    } else {
-        estopState = false;
-        lastDebounce = millis();
-    }
-    
-    return estopState;
+    // When the State Machine asks, do a direct, instant hardware read
+    // to bypass any potential loop delays in the CommTask.
+    is_estop_pressed = (digitalRead(PIN_EMBUTTON) == LOW);
+    return is_estop_pressed;
 }

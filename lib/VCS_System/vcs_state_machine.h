@@ -3,24 +3,29 @@
 
 #include <Arduino.h>
 
+// SIDLAK Safety Hierarchy Enums
 enum VcsState {
-    INIT_STATE,
-    IDLE_STATE,
-    MANUAL_STATE,
-    AUTONOMOUS_STATE,
-    FAULT_STATE,
-    ESTOP_STATE
+    INIT_STATE,        // Power-on self-test & stabilization
+    IDLE_STATE,        // Standby; waiting for RPi heartbeat
+    MANUAL_STATE,      // Human-in-the-loop control
+    AUTONOMOUS_STATE,  // RPi-controlled driving (DMS Active)
+    FAULT_STATE,       // Software/Comms fail-safe triggered
+    ESTOP_STATE        // Critical hardware lockout (Hard reset required)
 };
 
+// Global State Variable
 extern VcsState currentState;
 
+// Initialization and Main Logic
 void initState_Machine();
 void updateStateMachine(uint32_t externalFaults);
 
+// Telemetry & Display Helpers
 uint32_t getDMSHoldStartTime();
+const char* getStateName(VcsState state);
 
-// Helper functions for other modules
+// Logic Helpers for Actuators/UART
 bool isAutonomousMode();
 bool isDrivingState();
 
-#endif
+#endif // VCS_STATE_MACHINE_H

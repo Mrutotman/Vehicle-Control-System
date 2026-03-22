@@ -4,13 +4,15 @@
 #include <Arduino.h>
 #include "vcs_pins.h"
 #include "vcs_constants.h"
+#include "vcs_simulation.h"
 
-// Core functions
+// Volatile variables for ISR communication00
 void initHallSensors();
-void updateHallCalculations(); // Called in the main loop
 
-// Getters for other modules
+// Hall sensor processing logic, called from the ControlTask thread
+void updateHallCalculations();
+
+// Functions for Telemetry
 float getMeasuredRPM();
-uint32_t getTotalOdometer(); // Optional: pulses counted since boot
 
 #endif // VCS_HALLSENSOR_H
