@@ -1,130 +1,101 @@
-/* ==============================================================================
- * MODULE:        VCS_State_Machine
- * RESPONSIBILITY: Global System Logic and Security Enforcement.
- * DESCRIPTION:   Strictly implements the state table for Motor, Brake, and 
- * Steering. Handles transitions and self-test logic.
- * ============================================================================== */
-
-
-#include "vcs_pins.h"
 #include "vcs_state_machine.h"
 #include "vcs_uart.h"
-#include "vcs_steering.h"
+#include "vcs_pins.h"
 #include "vcs_embutton.h"
+#include "vcs_lowbrake.h"
+#include "vcs_reverse.h"
+
 
 VcsState currentState = INIT_STATE;
-static uint32_t initStartTime = 0;
-const uint32_t DMS_HANDOVER_DELAY = 1000; // 1 second hold required
-static uint32_t dmsHoldStartTime = 0;     // Tracks how long DMS has been held
+uint32_t dmsStartTime = 0;
 
 void initState_Machine() {
     currentState = INIT_STATE;
-    initStartTime = millis();
+    dmsStartTime = 0;
 }
 
-void updateStateMachine(uint32_t externalFaults) {
+void updateStateMachine(uint32_t faults) {
+    static VcsState lastState = INIT_STATE;
 
-    // 1. GLOBAL OVERRIDES (Physical Security)
+    // --- 1. PRIORITY SAFETY OVERRIDES (SIDLAK Hierarchy) ---
+    
+    // Physical E-Stop is the highest priority
     if (isEmButtonPressed()) {
         currentState = ESTOP_STATE;
-        return;
+    } 
+    // External faults (Over-current/Voltage) or Heartbeat Loss
+    else if (faults > 0 || (!rpiHeartbeatReceived() && currentState == AUTONOMOUS_STATE)) {
+        currentState = FAULT_STATE;
     }
 
-    // 2. READ INPUTS
-    bool dmsPressed = (digitalRead(PIN_DMS_BUTTON) == LOW); // Active LOW
-    bool brakePressed = (digitalRead(PIN_LOWBRAKE_IN) == LOW);
-    
-
-    // 3. STATE TRANSITION LOGIC
+    // --- 2. STATE TRANSITION LOGIC ---
     switch (currentState) {
-        
         case INIT_STATE:
-            // Standard 2s self-test
-            if (millis() - initStartTime > 2000) {
-                if (getMeasuredSteering() > 10 && rpiHeartbeatReceived()) {
-                    currentState = IDLE_STATE;
-                }
-            }
+            // Boot delay for sensor stabilization
+            if (millis() > 2000) currentState = IDLE_STATE;
             break;
 
         case IDLE_STATE:
-            // From IDLE, we default to MANUAL if the driver is ready
-            if (rpiHeartbeatReceived()) {
-                currentState = MANUAL_STATE;
-            }
+            // Wait for Pi to be alive before allowing Manual mode
+            if (rpiHeartbeatReceived()) currentState = MANUAL_STATE;
             break;
 
         case MANUAL_STATE:
-            // --- RULE: MANUAL TO AUTO via DMS + DELAY ---
-            if (dmsPressed && rpiHeartbeatReceived()) {
-                if (dmsHoldStartTime == 0) {
-                    dmsHoldStartTime = millis(); // Start the handover timer
-                }
-
-                // Check if the 1-second "Intent Window" has passed
-                if (millis() - dmsHoldStartTime >= DMS_HANDOVER_DELAY) {
-                    currentState = AUTONOMOUS_STATE;
-                    dmsHoldStartTime = 0; // Reset for next time
-                }
+            // Transition to Auto: Requires physical DMS hold (1.0s), 
+            // the RPi requesting Auto Mode (1), AND the car MUST NOT be in Reverse.
+            if (digitalRead(PIN_DMS_BUTTON) == LOW && getRPiCommandMode() == 1 && !isReverseEngaged()) {
+                if (dmsStartTime == 0) dmsStartTime = millis();
+                if (millis() - dmsStartTime > 1000) currentState = AUTONOMOUS_STATE;
             } else {
-                dmsHoldStartTime = 0; // Driver let go or Pi died; reset timer
+                dmsStartTime = 0;
             }
             break;
 
         case AUTONOMOUS_STATE:
-            // --- RULE: AUTO TO MANUAL via BRAKE ---
-            // If the brake is tapped, the driver takes control back instantly
-            if (brakePressed) {
+            // EXIT TO MANUAL IF:
+            // 1. Physical Brake is pressed (Hard override - using debounced function!)
+            // 2. RPi sends a Manual request (Soft override)
+            // 3. DMS button is released (Safety requirement)
+            if (isPhysicalBrakePressed() || 
+                getRPiCommandMode() == 0 || 
+                digitalRead(PIN_DMS_BUTTON) == HIGH) {
                 currentState = MANUAL_STATE;
             }
-
-            // --- RULE: ALWAYS DMS for AUTO ---
-            // If the driver lets go of the button, the car must stop for safety
-            if (!dmsPressed) {
-                currentState = IDLE_STATE; // Drop to safe neutral
-            }
-
-            // Security: Loss of Pi heartbeat drops to FAULT
-            if (!rpiHeartbeatReceived()) {
-                currentState = FAULT_STATE;
-            }
             break;
-
+            
         case FAULT_STATE:
-            // To clear, ensure the brake is pressed (as a safety park) and DMS is released
-            if (brakePressed && !dmsPressed && rpiHeartbeatReceived()) {
+            // In v1.4, reset only happens if Pi is re-linked and DMS is cleared
+            if (rpiHeartbeatReceived() && digitalRead(PIN_DMS_BUTTON) == HIGH) {
                 currentState = IDLE_STATE;
             }
             break;
 
         case ESTOP_STATE:
-            // Locked until power cycle
+            // ESTOP is a hard-lock. Requires physical power cycle or hard reset.
             break;
     }
 
-    // For debugging: Print state changes to Serial Monitor
-    static VcsState lastState = INIT_STATE;;
-
-    // Print to Serial Monitor ONLY when the state changes
+    // --- 3. STATE DEBUGGING ---
     if (currentState != lastState) {
-        Serial.print("VCS STATE CHANGE: ");
-        if (currentState == IDLE_STATE) Serial.println("IDLE");
-        if (currentState == MANUAL_STATE) Serial.println("MANUAL");
-        if (currentState == AUTONOMOUS_STATE) Serial.println("AUTONOMOUS (DMS ACTIVE)");
-        if (currentState == FAULT_STATE) Serial.println("!!! FAULT !!!");
+        Serial.print("VCS_STATE_MACHINE: Transitioned to ");
+        Serial.println(getStateName(currentState));
         lastState = currentState;
     }
 }
 
-// Helpers for Actuator Lockouts
-bool isAutonomousMode() {
-    return (currentState == AUTONOMOUS_STATE);
+// Helper to get string names for the Serial Monitor
+const char* getStateName(VcsState state) {
+    switch (state) {
+        case INIT_STATE:       return "INIT";
+        case IDLE_STATE:       return "IDLE";
+        case MANUAL_STATE:     return "MANUAL";
+        case AUTONOMOUS_STATE: return "AUTONOMOUS";
+        case FAULT_STATE:      return "FAULT";
+        case ESTOP_STATE:      return "ESTOP";
+        default:               return "UNKNOWN";
+    }
 }
 
-bool isDrivingState() {
-    return (currentState == MANUAL_STATE || currentState == AUTONOMOUS_STATE);
-}
-
-uint32_t getDMSHoldStartTime() {
-    return dmsHoldStartTime;
-}
+// Getters for other modules
+bool isAutonomousMode() { return currentState == AUTONOMOUS_STATE; }
+uint32_t getDMSHoldStartTime() { return dmsStartTime; }

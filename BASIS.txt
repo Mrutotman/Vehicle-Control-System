@@ -1,43 +1,23 @@
- VCS/
-main.ino
+vcs_embutton.h/.cpp
 
+vcs_lowbrake.h/.cpp
 
-VCS_Config/
-vcs_pins.h
+vcs_throttle.h/.cpp
+
+vcs_uart.h/.cpp
+
 vcs_constants.h
 
+vcs_pins.h
 
-VCS_Hall/
-vcs_hall.h
-vcs_hall.cpp
+vcs_display.h/.cpp
 
+vcs_hallsensor.h/.cpp
 
-VCS_Motor/
-vcs_commutation.h
-vcs_commutation.cpp
-vcs_speed_controller.h
-vcs_speed_controller.cpp
+vcs_simulation.h/.cpp
 
+vcs_threespeed.h/.cpp
 
-VCS_Steering/
-vcs_autosteering.h
-vcs_autosteering.cpp
-vcs_mansteering.h
-vcs_autosteering.cpp
+vcs_steering.h/.cpp
 
-
-VCS_Comm/
-vcs_uart.h
-vcs_uart.cpp
-
-
-VCS_System/
-vcs_state_machine.h
-vcs_state_machine.cpp
-vcs_safety.h
-vcs_safety.cpp
-
-
-VCS_Actuators/
-vcs_brake.h
-vcs_brake.cpp 
+vcs_state_machine.h/.cpp

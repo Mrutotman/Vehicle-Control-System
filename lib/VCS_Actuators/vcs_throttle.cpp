@@ -1,67 +1,91 @@
-/* ==============================================================================
- * MODULE:        VCS_Throttle
- * RESPONSIBILITY: Secure Speed Control via Direct Mapping or QuickPID.
- * DESCRIPTION:   In MANUAL mode, maps the physical pedal to the controller.
- * In AUTO mode, uses QuickPID to maintain target RPM.
- * ============================================================================== */
-
 #include "vcs_throttle.h"
-#include "vcs_state_machine.h"
 
-// PID Variables for Autonomous Speed Control
-float speed_setpoint, speed_input, speed_output;
-QuickPID speedPID(&speed_input, &speed_output, &speed_setpoint);
-
+// Global Telemetry Variables
 uint16_t current_throttle_adc = 0;
-uint8_t current_pwm_duty = 0;
+uint16_t current_pwm_duty = 0;
 
-// ESP32 Hardware Timer Settings
-const int throttlePwmChannel = 0;
-const int throttlePwmResolution = 8; 
+// PID Variables
+float measured_rpm = 0.0f;
+float target_rpm = 0.0f;
+float throttle_pwm_out = 0.0f;
+
+// Initialize QuickPID
+QuickPID speedPID(&measured_rpm, &throttle_pwm_out, &target_rpm);
 
 void initThrottle() {
-    // 1. Hardware Setup
-    ledcSetup(throttlePwmChannel, THROTTLE_PWM_FREQ, throttlePwmResolution);
-    ledcAttachPin(PIN_THROTTLE_OUT, throttlePwmChannel);
-    ledcWrite(throttlePwmChannel, 0); // Secure start at 0V
+    pinMode(PIN_THROTTLE_OUT, OUTPUT);
+    pinMode(PIN_THROTTLE_IN, INPUT);
 
-    // 2. QuickPID Configuration for Speed
-    speedPID.SetTunings(SPEED_KP, SPEED_KI, 0.0f); // Usually PI is enough for speed
-    speedPID.SetSampleTimeUs((1.0f / FREQ_SPEED_CTRL_HZ) * 1000000);
-    speedPID.SetOutputLimits(MIN_PWM_DUTY, MAX_PWM_DUTY); 
-    speedPID.SetMode(QuickPID::Control::automatic);
+    // Sync Nano 33 BLE hardware to the 10-bit standard (0-1023)
+    #ifdef NANO_33_BLE
+    analogReadResolution(10);
+    analogWriteResolution(10);
+    #endif
+
+    // Apply constants from vcs_constants.h
+    speedPID.SetTunings(SPEED_KP, SPEED_KI, 0.0f);
+    speedPID.SetOutputLimits(MIN_PWM_OUT, MAX_PWM_OUT);
+    
+    // CRITICAL: Sync QuickPID to our 1kHz Mbed ControlTask thread
+    speedPID.SetSampleTimeUs(1000); 
+    
+    // Start in manual to prevent accidental windup on boot
+    speedPID.SetMode(QuickPID::Control::manual);
 }
 
-void updateThrottle(float measured_rpm, float target_rpm) {
-    // Always read the physical pedal for safety overrides
+void updateThrottle(float current_rpm_in, float target_rpm_in) {
+    // Always read the pedal ADC for telemetry, regardless of state
     current_throttle_adc = analogRead(PIN_THROTTLE_IN);
 
-    // --- SECURITY STATE CHECK ---
-    if (currentState == MANUAL_STATE) {
-        // DIRECT MAPPING: Use the physical pedal
-        if (current_throttle_adc < THROTTLE_MIN_RUN) {
-            current_pwm_duty = 0;
-        } else {
-            long mapped = map(current_throttle_adc, THROTTLE_MIN_RUN, THROTTLE_MAX_RUN, MIN_PWM_DUTY, MAX_PWM_DUTY);
-            current_pwm_duty = (uint8_t)constrain(mapped, MIN_PWM_DUTY, MAX_PWM_DUTY);
-        }
-    } 
-    else if (currentState == AUTONOMOUS_STATE) {
-        // PID CONTROL: Use QuickPID to hit the target RPM
-        speed_input = measured_rpm;
-        speed_setpoint = target_rpm;
-        
-        speedPID.Compute();
-        current_pwm_duty = (uint8_t)speed_output;
+    // --- 1. HARDWARE SAFETY LOCKOUT ---
+    // [SECURITY FIX]: Directly poll the physical brake pedal at 1000Hz. 
+    // LOW means the pedal is pressed (INPUT_PULLUP).
+    bool isBrakePressed = (digitalRead(PIN_LOWBRAKE_IN) == LOW);
 
-        // Security Clamp: Ensure PID doesn't do anything crazy
-        current_pwm_duty = constrain(current_pwm_duty, MIN_PWM_DUTY, MAX_PWM_DUTY);
-    } 
-    else {
-        // HARD LOCKOUT: Force 0 if in IDLE, FAULT, or ESTOP
-        current_pwm_duty = 0;
+    // If the state machine says we shouldn't be driving (e.g., FAULT, ESTOP, IDLE),
+    // OR if the driver physically steps on the brake pedal:
+    if ((currentState != AUTONOMOUS_STATE && currentState != MANUAL_STATE) || isBrakePressed) {
+        current_pwm_duty = MIN_PWM_OUT;
+        analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
+        
+        speedPID.SetMode(QuickPID::Control::manual);
+        throttle_pwm_out = MIN_PWM_OUT;
+        return; // Halt further throttle processing
     }
 
-    // 3. Hardware Execution
-    ledcWrite(throttlePwmChannel, current_pwm_duty);
+    // --- 2. AUTONOMOUS CONTROL (PID) ---
+    if (currentState == AUTONOMOUS_STATE) {
+        // Re-engage PID if we just transitioned from Manual
+        if (speedPID.GetMode() == (uint8_t)QuickPID::Control::manual) {
+            speedPID.SetMode(QuickPID::Control::automatic);
+        }
+        
+        measured_rpm = current_rpm_in;
+        target_rpm = target_rpm_in;
+        
+        // Compute() evaluates true if 1000us has passed
+        if (speedPID.Compute()) {
+            current_pwm_duty = (uint16_t)throttle_pwm_out;
+            analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
+        }
+    } 
+    // --- 3. MANUAL CONTROL (Pass-Through) ---
+    else if (currentState == MANUAL_STATE) {
+        int mapped_pwm = MIN_PWM_OUT;
+        
+        // Deadband logic: Ignore slight touches or sensor noise
+        if (current_throttle_adc > THROTTLE_MIN_INPUT) {
+            mapped_pwm = map(current_throttle_adc, THROTTLE_MIN_INPUT, THROTTLE_MAX_INPUT, MIN_PWM_OUT, MAX_PWM_OUT);
+            mapped_pwm = constrain(mapped_pwm, MIN_PWM_OUT, MAX_PWM_OUT);
+        }
+        
+        current_pwm_duty = mapped_pwm;
+        analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
+        
+        // BUMPLESS TRANSFER: 
+        // Feed the manual PWM value back into the PID while in manual mode. 
+        // If the driver hits the DMS to engage Auto, the car won't jerk forward.
+        throttle_pwm_out = mapped_pwm;
+        speedPID.SetMode(QuickPID::Control::manual);
+    }
 }

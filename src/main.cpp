@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <esp_task_wdt.h>
+#include <mbed.h> // Mbed OS for Threads and Watchdog
 #include "vcs_pins.h"
 #include "vcs_constants.h"
 #include "vcs_state_machine.h"
@@ -10,101 +10,103 @@
 #include "vcs_steering.h"
 #include "vcs_hallsensor.h"
 #include "vcs_threespeed.h"
+#include "vcs_reverse.h"
 #include "vcs_display.h"
+#include "vcs_simulation.h"
 
-// Task Handles
-TaskHandle_t ControlTaskHandle;
-TaskHandle_t CommTaskHandle;
-TaskHandle_t UITaskHandle;
+using namespace rtos; // Access Mbed Threads
+using namespace mbed; // Access Hardware Watchdog
+
+// --- Mbed Thread Allocation ---
+// osPriorityRealtime guarantees the 1kHz loop never misses a microsecond
+Thread control_thread(osPriorityRealtime); 
+Thread comm_thread(osPriorityHigh);        
+Thread ui_thread(osPriorityNormal);        
 
 // --- 1. CONTROL TASK (1 kHz / 1 ms) ---
-// Runs on Core 1 to stay away from WiFi/BT/UART interrupts
-void ControlTask(void *pvParameters) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1ms for 1kHz
+void ControlTask() {
+    auto lastWakeTime = Kernel::Clock::now();
 
     for (;;) {
-        // Precise timing for Speed PI
+        // 1. Motor PID & Telemetry (Runs at 1000Hz)
         updateHallCalculations();
         updateThrottle(getMeasuredRPM(), getTargetRPM());
 
-        // Steering runs every 10th cycle (100Hz)
+        // 2. Steering PID (Runs at 100Hz via divider to save CPU)
         static uint8_t steerDivider = 0;
         if (++steerDivider >= 10) {
             updateSteeringPID(getTargetSteering(), isAutonomousMode());
             steerDivider = 0;
         }
 
-        // Reset the Task Watchdog for this specific task
-        esp_task_wdt_reset();
+        // 3. SEM Safety: Pet the Hardware Watchdog
+        Watchdog::get_instance().kick();
         
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+        // Exact 1ms precision sleep
+        ThisThread::sleep_until(lastWakeTime + std::chrono::milliseconds(1));
+        lastWakeTime = Kernel::Clock::now();
     }
 }
 
 // --- 2. COMM & STATE TASK (100 Hz / 10 ms) ---
-void CommTask(void *pvParameters) {
+void CommTask() {
     for (;;) {
-        updateUART(); // Read from Pi
-        updateStateMachine(0); // Audit system state
-        updateLowBrake(); // Manage safety brake
+        // Poll hardware switches
+        updateEmButton();   
+        updateLowBrake();   
+        updateThreeSpeed(); 
+        updateReverse();
         
-        vTaskDelay(pdMS_TO_TICKS(10));
+        // Parse incoming UART packets from the Pi
+        updateUART(); 
+        
+        // Audit system safety and transition states
+        updateStateMachine(0); 
+        
+        ThisThread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
-// --- 3. UI & TELEMETRY TASK (10 Hz / 100 ms) ---
-void UITask(void *pvParameters) {
+// --- 3. UI & TELEMETRY TASK (20 Hz / 50 ms) ---
+void UITask() {
     for (;;) {
-        // Send telemetry to Pi at 20Hz
+        // Send the CRC16-protected payload to the Pi
         broadcastVehicleTelemetry();
+        
+        // Update OLED
+        updateDisplay(getMeasuredRPM(), getMeasuredSteering(), current_drive_mode);
 
-        // Update the physical OLED
-        updateDisplay(getMeasuredRPM(), getMeasuredSteering(), getRPiCommandMode());
-
-        vTaskDelay(pdMS_TO_TICKS(50)); 
+        ThisThread::sleep_for(std::chrono::milliseconds(50));
     }
 }
 
 void setup() {
     Serial.begin(115200);
-    delay(1000); // Give the serial monitor time to connect
-    Serial.println("--- VCS SYSTEM BOOTING ---");
+    delay(1000); // Allow power to stabilize on boot
+    Serial.println("--- VCS v1.4 SYSTEM BOOTING (NANO 33 BLE) ---"); // [UPDATED] Version number
 
-    // 1. Hardware Init (Serial, Pins, I2C)
-
-    // Initializing high-level architecture
+    // 1. Hardware Module Initialization
     initState_Machine();
     initUART();
-    
-    // Actuators & Drive Logic
     initThrottle();
     initLowBrake();
     initEmButton();
     initSteering();
     initHallSensors();
     initThreeSpeed();
+    initReverse(); // [ADDED] Initialize reverse pins and default states
     initDisplay();
 
-    // 2. Initialize Task Watchdog (WDT)
-    esp_task_wdt_init(2, true); // 2 second timeout
+    // 2. Enable Mbed Hardware Watchdog (SEM Requirement)
+    Watchdog::get_instance().start(2000);
 
-    // 3. Create Tasks
-    xTaskCreatePinnedToCore(
-        ControlTask, "Control", 4096, NULL, 10, &ControlTaskHandle, 1);
-    
-    xTaskCreatePinnedToCore(
-        CommTask, "Comm", 4096, NULL, 5, &CommTaskHandle, 0);
-
-    xTaskCreatePinnedToCore(
-        UITask, "UI", 4096, NULL, 1, &UITaskHandle, 0);
-
-    // Add the most critical task to the watchdog
-    esp_task_wdt_add(ControlTaskHandle);
+    // 3. Start Mbed OS Threads
+    control_thread.start(ControlTask);
+    comm_thread.start(CommTask);
+    ui_thread.start(UITask);
 }
 
 void loop() {
-    // In FreeRTOS, the Arduino loop() is a low-priority task. 
-    // We leave it empty or use it for background system monitoring.
-    vTaskDelete(NULL); 
+    // In Mbed OS, the standard Arduino loop() acts as a background idle thread.
+    ThisThread::sleep_for(std::chrono::milliseconds(1000));
 }

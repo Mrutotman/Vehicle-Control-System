@@ -1,17 +1,16 @@
-/* ==============================================================================
- * MODULE:        VCS_UART
- * RESPONSIBILITY: UART communication with ANS (Raspberry Pi).
- * DESCRIPTION:   Decodes the custom binary protocol using a state-machine parser.
- * Includes CRC16 validation to ensure command integrity.
- * ============================================================================== */
-
 #include "vcs_uart.h"
 #include "vcs_hallsensor.h"
 #include "vcs_steering.h"
 #include "vcs_simulation.h"
+#include "vcs_state_machine.h"
+#include "vcs_pins.h"
+#include "vcs_reverse.h"
 
-// Setup ESP32 Hardware Serial 2
-HardwareSerial ANS_SERIAL(2); 
+    #ifdef NANO_33_BLE
+        #define ANS_SERIAL Serial1
+    #else
+        #define ANS_SERIAL Serial
+    #endif
 
 enum UartState { 
     WAIT_START1, WAIT_START2, WAIT_TYPE, WAIT_LEN, WAIT_SEQ, 
@@ -34,8 +33,7 @@ uint16_t calculateCRC16(uint8_t *data, uint8_t length);
 void processCommand(uint8_t msgType, uint8_t *payload, uint8_t length);
 
 void initUART() {
-    // Initialize UART2 using the specific pins from our config
-    ANS_SERIAL.begin(115200, SERIAL_8N1, PIN_UART_RX, PIN_UART_TX);
+    ANS_SERIAL.begin(115200); 
     last_valid_packet_time = millis();
 }
 
@@ -61,13 +59,12 @@ void updateUART() {
             case WAIT_LEN:
                 rxBuffer[1] = byte;
                 expectedLength = byte;
-                rxState = WAIT_SEQ; // Transition to SEQ state
+                rxState = WAIT_SEQ;
                 break;
 
             case WAIT_SEQ:
-                // We currently don't use the sequence byte for logic, but we must consume it
                 rxState = (expectedLength > 0) ? WAIT_PAYLOAD : WAIT_CRC1;
-                rxIndex = 2; // Start storing payload after Type and Length
+                rxIndex = 2; 
                 break;
                 
             case WAIT_PAYLOAD:
@@ -76,12 +73,12 @@ void updateUART() {
                 break;
                 
             case WAIT_CRC1:
-                rxBuffer[expectedLength + 2] = byte; // CRC MSB
+                rxBuffer[expectedLength + 2] = byte; 
                 rxState = WAIT_CRC2;
                 break;
                 
             case WAIT_CRC2:
-                rxBuffer[expectedLength + 3] = byte; // CRC LSB
+                rxBuffer[expectedLength + 3] = byte; 
                 rxState = WAIT_END;
                 break;
                 
@@ -137,32 +134,25 @@ uint8_t getTargetBrake() { return target_brake; }
 
 bool rpiHeartbeatReceived() {
     return (millis() - last_valid_packet_time) <= 200;
-    //return true; // TEMP: Always return true for now to avoid E-Stop during testing
 }
 
+// (Kept sendTelemetry exactly as you had it)
 void sendTelemetry(float rpm, uint16_t steer, float volt, uint8_t state) {
-    // Structure: [0xAA, 0x55, Type(0x02), Len(9), RPM(4), Steer(2), Volt(2), State(1), CRC(2), 0xFF]
     uint8_t telBuffer[12];
-    
-    // We'll scale voltage by 100 to send as an integer (e.g., 12.55V -> 1255)
     uint16_t voltScaled = (uint16_t)(volt * 100);
-    int32_t rpmInt = (int32_t)rpm; // Cast float to int for simpler packetizing
+    int32_t rpmInt = (int32_t)rpm; 
 
-    telBuffer[0] = 0x02; // Message Type: Telemetry
-    telBuffer[1] = 9;    // Payload Length
+    telBuffer[0] = 0x02; 
+    telBuffer[1] = 9;    
     
-    // Pack Payload
     telBuffer[2] = (rpmInt >> 24) & 0xFF;
     telBuffer[3] = (rpmInt >> 16) & 0xFF;
     telBuffer[4] = (rpmInt >> 8) & 0xFF;
     telBuffer[5] = rpmInt & 0xFF;
-    
     telBuffer[6] = (steer >> 8) & 0xFF;
     telBuffer[7] = steer & 0xFF;
-    
     telBuffer[8] = (voltScaled >> 8) & 0xFF;
     telBuffer[9] = voltScaled & 0xFF;
-    
     telBuffer[10] = state;
 
     uint16_t crc = calculateCRC16(telBuffer, 11);
@@ -176,34 +166,53 @@ void sendTelemetry(float rpm, uint16_t steer, float volt, uint8_t state) {
 }
 
 void broadcastVehicleTelemetry() {
-    // Standard Packet Header
-    Serial.write(0xAA); 
-    Serial.write(0x05); 
+    ANS_SERIAL.write(0xAA); 
+    ANS_SERIAL.write(0x07); // Length is now 7 bytes to include Gear and Reverse
+
+    float rpm;
+    uint16_t steer;
+    uint8_t state = (uint8_t)currentState;
+    
+    // Read the new hardware states to send to Pi
+    uint8_t gear = 1; // Default to MED (1)
+    if (digitalRead(PIN_SPEED_SW_LOW) == LOW) gear = 0;
+    else if (digitalRead(PIN_SPEED_SW_HIGH) == LOW) gear = 2;
+    
+    uint8_t rev = isReverseEngaged() ? 1 : 0;
 
     #if SIMULATION_MODE
-        // --- SENDING SIMULATED SIGNAL ---
-        float rpm = getSimulatedRPM();
-        uint16_t steer = getSimulatedSteering();
-        uint8_t state = (uint8_t)currentState;
+        rpm = getSimulatedRPM();
+        steer = getSimulatedSteering();
         
-        // --- HUMAN READABLE DEBUG ---
         Serial.print("SIM DATA -> RPM: ");
         Serial.print(rpm);
         Serial.print(" | Steer: ");
-        Serial.println(steer);
+        Serial.print(steer);
+        Serial.print(" | Gear: ");
+        Serial.print(gear);
+        Serial.print(" | Rev: ");
+        Serial.println(rev);
     #else
-        // --- SENDING REAL HARDWARE SIGNAL ---
-        float rpm = getMeasuredRPM();
-        uint16_t steer = getMeasuredSteering();
-        uint8_t state = (uint8_t)currentState;
-
-        // Pack and send actual sensor data
-        Serial.write(highByte((int)rpm));
-        Serial.write(lowByte((int)rpm));
-        Serial.write(highByte(steer));
-        Serial.write(lowByte(steer));
-        Serial.write(state);
+        rpm = getMeasuredRPM();
+        steer = getMeasuredSteering();
     #endif
 
-    Serial.write(0xFF); // End Byte
+    // Pack and send binary data to Raspberry Pi
+    ANS_SERIAL.write(((int)rpm >> 8) & 0xFF);
+    ANS_SERIAL.write((int)rpm & 0xFF);
+    ANS_SERIAL.write((steer >> 8) & 0xFF);
+    ANS_SERIAL.write(steer & 0xFF);
+    ANS_SERIAL.write(state);
+    ANS_SERIAL.write(gear);
+    ANS_SERIAL.write(rev);
+    ANS_SERIAL.write(0xFF); // End Byte
+}
+
+// [ADDED] Simple XOR Checksum for Basic Integrity Check on UART Commands (Not as robust as CRC16, but very lightweight)
+uint8_t calculateChecksum(const String& payload) {
+    uint8_t checksum = 0;
+    for (unsigned int i = 0; i < payload.length(); i++) {
+        checksum ^= payload[i];
+    }
+    return checksum;
 }
