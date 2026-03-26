@@ -49,49 +49,50 @@ The VCS enforces a strict priority hierarchy. Motor power is physically impossib
 
 ## 🔌 Comprehensive Hardware & Wiring Guide (V1.4)
 
-This section serves as the master reference for the V1.4 PCB, detailing the exact signal path from the physical perimeter terminal blocks to the Arduino Nano 33 BLE software pins.
+This section serves as the master reference for the V1.4 PCB, detailing the exact signal path from the physical perimeter terminal blocks to the Arduino Nano 33 BLE software pins based on the official schematic.
 
 ![Close-up of final silkscreen labels for V1.4 perimeter terminal blocks](assets/image_3099c1.png)
 
 ### 📥 Inputs (Sensors & Driver Controls)
-| Terminal Block | MCU Pin | Software Macro (`VCS_Pins.h`) | Hardware Path / Conditioning | Function |
-| :--- | :--- | :--- | :--- | :--- |
-| **POWER** | `VIN` | *N/A* | Direct to Nano `VIN` via **C3 (1000µF)** | Main logic power (12V/5V step-down to Nano). Bulk smoothed. |
-| **STEERPOT** | `A0` | `PIN_STEER_POT` | Direct trace to ADC | 10-turn Steering Potentiometer. |
-| **THRTP** | `A1` | `PIN_THROTTLE_IN` | Direct trace to ADC | Driver Throttle Pedal (0-3.3V). |
-| **DMSC** | `D2` | `PIN_DMS_BUTTON` | Direct trace (`INPUT_PULLUP`) | Dead Man's Switch. Active-Low. |
-| **BRKS+** | `D8` | `PIN_LOWBRAKE_IN` | Direct trace (`INPUT_PULLUP`) | Physical Brake Switch. Active-Low. |
-| **ROTARY / RVRS**| `A2` | `PIN_REVERSE_IN` | Direct trace (`INPUT_PULLUP`) | Driver's Reverse/Gear Selector. Active-Low. |
-| **3PS (Low)** | `A3` | `PIN_SPEED_SW_LOW`| Direct trace (`INPUT_PULLUP`) | 3-Position Speed Switch (Low limit). |
-| **3PS (High)** | `A7` | `PIN_SPEED_SW_HIGH`| Direct trace (`INPUT_PULLUP`) | 3-Position Speed Switch (High limit). |
-| **SPS+** | `D10`| `PIN_HALL_SPEED` | Direct trace (Verify 3.3V max) | Motor Hall-Effect Speed Feedback. |
+| Terminal Block | MCU Pin | Hardware Path / Conditioning | Function |
+| :--- | :--- | :--- | :--- |
+| **POWER** | `5V` | Direct to Nano `5V` via **C3 (1000µF)** | Main logic power (+5V input). Bulk smoothed. |
+| **STEER** | `A0` | Direct trace to ADC | 10-turn Steering Potentiometer (+3.3V reference). |
+| **THRT** | `A1` | Direct trace to ADC | Driver Throttle Pedal (0-3.3V). |
+| **ROTARY** | `A2, A3, A7`| Direct trace (`INPUT_PULLUP`) | Gear Selector. `A2` (Reverse), `A3` (Neutral), `A7` (Drive). |
+| **DMSC** | `D2` | Direct trace (`INPUT_PULLUP`) | Dead Man's Switch Button. Active-Low. |
+| **ESC** | `D4` | Direct trace (`INPUT_PULLUP`) | **Emergency Stop Button**. Active-Low. |
+| **BRKP** | `D8` | Hardware Debounce via **C2 (0.1µF)** | Physical Brake Pedal Potentionmeter. Active-Low. |
+| **SPS+** | `D10` | 5V to 3.3V via **TXB0108 Level Shifter** | Motor Hall-Effect Speed Sensor input. |
 
-### 📤 Outputs (Actuators & Motor Control)
-| Terminal Block | MCU Pin | Software Macro (`VCS_Pins.h`) | Hardware Path / Security Barrier | Function |
-| :--- | :--- | :--- | :--- | :--- |
-| **BRKP** | `D3` | `PIN_LOWBRAKE_OUT`| **PC817 Optocoupler** | Galvanically isolated brake trigger. 60V safe. |
-| **MISTECON** (PUL)| `D5` | `PIN_STEER_PUL` | **TXS0108E Level Shifter** | Steps 3.3V up to clean 5V Stepper Pulse. |
-| **MISTECON** (DIR)| `D6` | `PIN_STEER_DIR` | **TXS0108E Level Shifter** | Steps 3.3V up to clean 5V Stepper Direction. |
-| **MISTECON** (ENA)| `D7` | `PIN_STEER_ENA` | **TXS0108E Level Shifter** | Steps 3.3V up to clean 5V Stepper Enable. |
-| **ESC (S+)** | `D9` | `PIN_THROTTLE_OUT`| **RC Filter (C1, C2) + LM358** | Converts PWM to pure analog DC, buffered. |
-| *(Internal)* | `A6` | `PIN_LED_FAULT` | Direct to onboard **LED1** via 220Ω | Dashboard Error / Fault indicator. |
+### 📤 Outputs (Actuators & Motor Signals)
+| Terminal Block | MCU Pin | Hardware Path / Security Barrier | Function |
+| :--- | :--- | :--- | :--- |
+| **BRKS+** | `D3` | **PC817 Optocoupler** | Galvanically isolated Brake Signal to Motor Controller. |
+| **MISTECON** | `D5, D6, D7`| **TXB0108 Level Shifter** | Stepper control. **Wired Common Anode:** PUL/DIR/ENA `+` pins are tied to 5V. Nano sinks current via `D5` (PUL-), `D6` (DIR-), and `D7` (ENA-). |
+| **THRTS+** | `D9` | **RC Filter + LM358 Op-Amp** | Analog Throttle Signal to Motor Controller. Filtered by `R1` (10k) and `C1` (10µF) to create clean DC. |
+| **3PS** | `D11, D12`| 3.3V to 5V via **TXB0108 Level Shifter** | Gearshift Signals to Motor Controller. `D11` (High Speed), `D12` (Low Speed). |
+| **RVRS+** | `D13` | 3.3V to 5V via **TXB0108 Level Shifter** | Reverse Signal to Motor Controller. |
+| *LED* | `A6` | RED LED for indication | Dashboard Error / Fault indicator. |
 
 ### 📡 Communications (Telemetry)
-| Terminal Block | MCU Pin | Software Macro (`VCS_Pins.h`) | Hardware Path / Conditioning | Function |
-| :--- | :--- | :--- | :--- | :--- |
-| **DISPLAY** | `A4, A5`| `PIN_OLED_SDA/SCL`| Direct I2C | Local OLED Dashboard (SSD1306). |
-| **UARTRPI** | `D0, D1`| `PIN_UART_RX/TX` | Direct UART | Telemetry & Control Uplink to Raspberry Pi. |
+| Terminal Block | MCU Pin | Hardware Path / Conditioning | Function |
+| :--- | :--- | :--- | :--- |
+| **DISPLAY** | `A4, A5`| Direct I2C | Local OLED Dashboard (SSD1306). Powered by **+5V**. |
+| **UARTRPI** | `D0, D1`| Direct UART | `RX` / `TX` Telemetry & Control Uplink to Raspberry Pi. |
 
 ---
 
 ## 🔒 Hardware Security Architecture & Assembly Rules
 
+![V1.4 Dual Ground Planes demonstrating strict galvanic isolation (the central moat)](assets/image_b43b29.png)
 ![V1.4 Dual Ground Planes demonstrating strict galvanic isolation (the central moat)](assets/image_b41b29.png)
 
-1. **The 60V Isolation Moat:** The `BRKP` terminal connects directly to the high-voltage vehicle motor controller. The `D3` signal triggers an infrared LED inside the **PC817 Optocoupler**. **Wiring Rule:** The ground pin on the `BRKP` terminal must *only* connect to the vehicle ground, never the Nano ground.
-2. **The 5V Translation Bridge:** The **TXS0108E** high-speed level shifter guarantees that 5V stepper noise cannot back-feed into the 3.3V logic pins (`D5`, `D6`, `D7`).
-3. **The Analog Clean Room:** The V1.4 board routes the `D9` PWM through an RC low-pass filter (`C1`, `C2`, `R1`, `R2`) to flatten it into true DC, then pushes it through an **LM358 Op-Amp** to buffer the current, ensuring the throttle signal never sags under load.
-4. **Active-Low Fail-Safes:** All critical digital inputs (`DMSC`, `ROTARY`, `BRKS+`) are wired active-low with internal pull-ups. If a wire is severed during the race, the system safely defaults to a deactivated state.
+1. **The 60V Isolation Moat:** The `BRKS+` terminal connects directly to the high-voltage vehicle motor controller. The `D3` signal triggers an infrared LED inside the **PC817 Optocoupler** (`R4` current limited). **Wiring Rule:** The ground pin on the `BRKS+` terminal must *only* connect to the vehicle ground, never the Nano ground.
+2. **The 5V Translation Bridge:** The **TXB0108** high-speed bidirectional level shifter guarantees that 5V noise from the stepper driver (`MISTECON`), Speed Sensor (`SPS+`), and shift signals (`3PS`, `RVRS`) cannot back-feed into the 3.3V logic pins. 
+3. **Common-Anode Stepper Wiring:** The `MISTECON` port outputs 5V on all positive pins. The Nano triggers steps by pulling the negative pins (`PUL-`, `DIR-`, `ENA-`) to ground via the level shifter. 
+4. **The Analog Clean Room:** The V1.4 board routes the `D9` PWM through an RC low-pass filter (`C1`=10µF, `R1`=10kΩ) to flatten it into true DC, then pushes it through the **LM358 Op-Amp** to buffer the current to the `THRTS+` terminal.
+5. **Active-Low Fail-Safes:** All critical digital inputs (`DMSC`, `ESC`, `BRKP`, `ROTARY`) are wired active-low. If a wire is severed during the race, the system safely defaults to a deactivated/neutral state.
 
 ---
 
@@ -101,19 +102,19 @@ This section serves as the master reference for the V1.4 PCB, detailing the exac
 | Designator | Component | Function |
 | :--- | :--- | :--- |
 | **NANO1** | Arduino Nano 33 BLE | Primary MCU (3.3V Logic, RTOS, BLE capabilities). |
-| **TXS0108E**| 8-Channel Level Shifter| Safely translates 3.3V Nano signals to 5V logic for stepper driver. |
-| **LM-358** | Dual Op-Amp | Buffers the hardware-filtered PWM signal to the `ESC` throttle. |
-| **PC817** | Optocoupler | Creates physical light-gap barrier to trigger the 60V `BRKP` line. |
+| **TXS0108E** | TXS0108E Module | Bidirectional Level Shifter. Translates 3.3V/5V for stepper, speed sensor, and shifter logic. |
+| **LM-358** | LM-358 | Dual Op-Amp. Buffers the hardware-filtered PWM signal to the `THRTS+` terminal. |
+| **PC817** | PC817 | Optocoupler. Creates physical light-gap barrier to safely trigger the 60V `BRKS+` line. |
 
 ### Passive Components (Resistors & Capacitors)
 | Designator | Value | Purpose |
 | :--- | :--- | :--- |
-| **C3** | `1000µF` | Bulk electrolytic capacitor. Absorbs voltage spikes on `POWER`. |
-| **C2** | `10µF` | Smoothing capacitor (part of the Op-Amp / Throttle RC filter). |
-| **C1** | `0.1µF` | High-frequency decoupling/filter capacitor. |
-| **R1, R3** | `10kΩ` | Standard pull-up/pull-down or filter resistors. |
-| **R2** | `3.3kΩ` | Filter network resistor. |
-| **R4, R5** | `220Ω` | Current-limiting resistors for LEDs. |
+| **C3** | `1000µF/` | Bulk electrolytic capacitor. Absorbs voltage spikes on the main `POWER` input. |
+| **C1** | `10µF` | Smoothing electrolytic capacitor (part of the Op-Amp / Throttle RC filter network). |
+| **C2** | `0.1µF` | Hardware debounce electrolyticcapacitor for the `BRKP` brake pedal switch. |
+| **R1, R3** | `10kΩ` | Throttle RC filter network and voltage dividers. |
+| **R2** | `3.3kΩ` | Throttle RC filter network inline resistor. |
+| **R4** | `220Ω` | Current-limiting resistor for the Optocoupler's internal LED. |
 
 ---
 
