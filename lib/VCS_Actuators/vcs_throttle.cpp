@@ -4,6 +4,10 @@
 uint16_t current_throttle_adc = 0;
 uint16_t current_pwm_duty = 0;
 
+// EMA Smoothing for Throttle Input
+float smoothedThrottle = 0.0;
+const float emaAlphaThrottle = 0.15; // 0.15 is the smoothing weight
+
 // PID Variables
 float measured_rpm = 0.0f;
 float target_rpm = 0.0f;
@@ -34,11 +38,18 @@ void initThrottle() {
 }
 
 void updateThrottle(float current_rpm_in, float target_rpm_in) {
-    // Always read the pedal ADC for telemetry, regardless of state
-    current_throttle_adc = analogRead(PIN_THROTTLE_IN);
+    // --- EMA FILTER INJECTION ---
+    // Read the raw noisy pin first
+    int rawThrottle = analogRead(PIN_THROTTLE_IN);
+    
+    // Apply the EMA math to filter out motor spikes
+    smoothedThrottle = (emaAlphaThrottle * rawThrottle) + ((1.0 - emaAlphaThrottle) * smoothedThrottle);
+    
+    // Assign the clean, smoothed value for telemetry and downstream logic
+    current_throttle_adc = (uint16_t)smoothedThrottle;
 
     // --- 1. HARDWARE SAFETY LOCKOUT ---
-    // [SECURITY FIX]: Directly poll the physical brake pedal at 1000Hz. 
+    // Directly poll the physical brake pedal at 1000Hz. 
     // LOW means the pedal is pressed (INPUT_PULLUP).
     bool isBrakePressed = (digitalRead(PIN_LOWBRAKE_IN) == LOW);
 
@@ -73,7 +84,7 @@ void updateThrottle(float current_rpm_in, float target_rpm_in) {
     else if (currentState == MANUAL_STATE) {
         int mapped_pwm = MIN_PWM_OUT;
         
-        // Deadband logic: Ignore slight touches or sensor noise
+        // Deadband logic: Ignore slight touches or sensor noise (Now using smoothed ADC)
         if (current_throttle_adc > THROTTLE_MIN_INPUT) {
             mapped_pwm = map(current_throttle_adc, THROTTLE_MIN_INPUT, THROTTLE_MAX_INPUT, MIN_PWM_OUT, MAX_PWM_OUT);
             mapped_pwm = constrain(mapped_pwm, MIN_PWM_OUT, MAX_PWM_OUT);

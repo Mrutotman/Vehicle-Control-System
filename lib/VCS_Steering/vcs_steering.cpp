@@ -1,5 +1,8 @@
 #include "vcs_steering.h"
 
+// EMA Smoothing for Steering Input
+float smoothedSteering = 0.0;
+const float emaAlphaSteering = 0.15; // 0.15 is the smoothing weight
 
 // PID Variables
 float setpoint, input, output;
@@ -38,7 +41,15 @@ uint16_t getMeasuredSteering() {
     // In Simulation, we use the "Digital Twin" position
     current_pos = (uint16_t)constrain(sim_steer_pos, COMM_STEER_LEFT, COMM_STEER_RIGHT);
 #else
-    int raw_adc = analogRead(PIN_STEER_POT);
+    // --- EMA FILTER INJECTION ---
+    // Read the raw noisy pin
+    int rawSteering = analogRead(PIN_STEER_POT);
+    
+    // Apply the EMA math to filter out motor spikes
+    smoothedSteering = (emaAlphaSteering * rawSteering) + ((1.0 - emaAlphaSteering) * smoothedSteering);
+    
+    // Assign the clean, smoothed value to raw_adc for downstream checks
+    int raw_adc = (int)smoothedSteering;
 
     // DISCONNECTION CHECK (Hardware Security)
     if (raw_adc < 12 || raw_adc > 1010) {

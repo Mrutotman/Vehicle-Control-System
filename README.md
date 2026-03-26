@@ -17,7 +17,7 @@ This system was architected and refined in collaboration with **Gemini 3.1 Pro**
 
 ### **v1.4 (Current - Custom PCB & Galvanic Isolation)**
 *The "Hardware Security" release. Focuses on migrating from loose wire prototypes to a professional, noise-immune physical board.*
-* **Custom PCB:** 100x100mm form factor with dedicated terminal blocks for perimeter harness wiring.
+* **Custom PCB:** 100x80mm form factor with dedicated terminal blocks for perimeter harness wiring.
 * **Galvanic Isolation:** Integrated PC817 Optocoupler creating a physical barrier between the Nano's ground and the 60V vehicle ground.
 * **Analog Signal Conditioning:** On-board LM358 Op-Amp and RC filtering (`C1`, `C2`) for clean, hardware-smoothed throttle output.
 * **5V Logic Translation:** Dedicated TXS0108E level-shifting IC for reliable communication with the stepper driver and peripherals.
@@ -85,14 +85,16 @@ This section serves as the master reference for the V1.4 PCB, detailing the exac
 
 ## 🔒 Hardware Security Architecture & Assembly Rules
 
+TOP LAYER OF PCB
 ![V1.4 Dual Ground Planes demonstrating strict galvanic isolation (the central moat)](assets/image_b43b29.png)
+
+BOTTOM LAYER OF PCB
 ![V1.4 Dual Ground Planes demonstrating strict galvanic isolation (the central moat)](assets/image_b41b29.png)
 
-1. **The 60V Isolation Moat:** The `BRKS+` terminal connects directly to the high-voltage vehicle motor controller. The `D3` signal triggers an infrared LED inside the **PC817 Optocoupler** (`R4` current limited). **Wiring Rule:** The ground pin on the `BRKS+` terminal must *only* connect to the vehicle ground, never the Nano ground.
-2. **The 5V Translation Bridge:** The **TXB0108** high-speed bidirectional level shifter guarantees that 5V noise from the stepper driver (`MISTECON`), Speed Sensor (`SPS+`), and shift signals (`3PS`, `RVRS`) cannot back-feed into the 3.3V logic pins. 
-3. **Common-Anode Stepper Wiring:** The `MISTECON` port outputs 5V on all positive pins. The Nano triggers steps by pulling the negative pins (`PUL-`, `DIR-`, `ENA-`) to ground via the level shifter. 
-4. **The Analog Clean Room:** The V1.4 board routes the `D9` PWM through an RC low-pass filter (`C1`=10µF, `R1`=10kΩ) to flatten it into true DC, then pushes it through the **LM358 Op-Amp** to buffer the current to the `THRTS+` terminal.
-5. **Active-Low Fail-Safes:** All critical digital inputs (`DMSC`, `ESC`, `BRKP`, `ROTARY`) are wired active-low. If a wire is severed during the race, the system safely defaults to a deactivated/neutral state.
+1. **The 5V Translation Bridge:** The **TXS0108E** high-speed bidirectional level shifter guarantees that 5V noise from the stepper driver (`MISTECON`), Speed Sensor (`SPS+`), and shift signals (`3PS`, `RVRS`) cannot back-feed into the 3.3V logic pins. 
+2. **Common-Anode Stepper Wiring:** The `MISTECON` port outputs 5V on all positive pins. The Nano triggers steps by pulling the negative pins (`PUL-`, `DIR-`, `ENA-`) to ground via the level shifter. 
+3. **The Analog Clean Room:** The V1.4 board routes the `D9` PWM through an RC low-pass filter (`C1`=10µF, `R1`=10kΩ) to flatten it into true DC, then pushes it through the **LM358 Op-Amp** to buffer the current to the `THRTS+` terminal.
+4. **Active-Low Fail-Safes:** All critical digital inputs (`DMSC`, `ESC`, `BRKP`, `ROTARY`) are wired active-low. If a wire is severed during the race, the system safely defaults to a deactivated/neutral state.
 
 ---
 
