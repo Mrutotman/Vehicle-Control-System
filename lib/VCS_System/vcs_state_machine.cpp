@@ -1,10 +1,10 @@
 #include "vcs_state_machine.h"
 #include "vcs_uart.h"
 #include "vcs_pins.h"
-#include "vcs_embutton.h"
+#include "vcs_deadman.h"    // [ADDED] Replaces vcs_embutton
 #include "vcs_lowbrake.h"
+#include "vcs_throttle.h"   // [ADDED] For the pedal override check
 #include "vcs_reverse.h"
-
 
 VcsState currentState = INIT_STATE;
 uint32_t dmsStartTime = 0;
@@ -17,14 +17,10 @@ void initState_Machine() {
 void updateStateMachine(uint32_t faults) {
     static VcsState lastState = INIT_STATE;
 
-    // --- 1. PRIORITY SAFETY OVERRIDES (SIDLAK Hierarchy) ---
+    // --- 1. PRIORITY SAFETY OVERRIDES ---
     
-    // Physical E-Stop is the highest priority
-    if (isEmButtonPressed()) {
-        currentState = ESTOP_STATE;
-    } 
     // External faults (Over-current/Voltage) or Heartbeat Loss
-    else if (faults > 0 || (!rpiHeartbeatReceived() && currentState == AUTONOMOUS_STATE)) {
+    if (faults > 0 || (!rpiHeartbeatReceived() && currentState == AUTONOMOUS_STATE)) {
         currentState = FAULT_STATE;
     }
 
@@ -41,9 +37,9 @@ void updateStateMachine(uint32_t faults) {
             break;
 
         case MANUAL_STATE:
-            // Transition to Auto: Requires physical DMS hold (1.0s), 
+            // Transition to Auto: Requires physical DMS AND gate hold (1.0s), 
             // the RPi requesting Auto Mode (1), AND the car MUST NOT be in Reverse.
-            if (digitalRead(PIN_DMS_BUTTON) == LOW && getRPiCommandMode() == 1 && !isReverseEngaged()) {
+            if (isDeadmanActive() && getRPiCommandMode() == 1 && !isReverseEngaged()) {
                 if (dmsStartTime == 0) dmsStartTime = millis();
                 if (millis() - dmsStartTime > 1000) currentState = AUTONOMOUS_STATE;
             } else {
@@ -53,25 +49,29 @@ void updateStateMachine(uint32_t faults) {
 
         case AUTONOMOUS_STATE:
             // EXIT TO MANUAL IF:
-            // 1. Physical Brake is pressed (Hard override - using debounced function!)
-            // 2. RPi sends a Manual request (Soft override)
-            // 3. DMS button is released (Safety requirement)
+            // 1. Physical Brake is pressed (Rule 412c Hard Override)
+            // 2. Physical Throttle is pressed (Rule 412c Hard Override)
+            // 3. Either DMS button is released (Rule 412f Safety requirement)
+            // 4. RPi sends a Manual request (Soft override)
             if (isPhysicalBrakePressed() || 
-                getRPiCommandMode() == 0 || 
-                digitalRead(PIN_DMS_BUTTON) == HIGH) {
+                isThrottlePedalPressed() || 
+                !isDeadmanActive() || 
+                getRPiCommandMode() == 0) {
+                
                 currentState = MANUAL_STATE;
             }
             break;
             
         case FAULT_STATE:
-            // In v1.4, reset only happens if Pi is re-linked and DMS is cleared
-            if (rpiHeartbeatReceived() && digitalRead(PIN_DMS_BUTTON) == HIGH) {
+            // Reset only happens if Pi is re-linked and driver's hands are OFF the dead-man switches
+            if (rpiHeartbeatReceived() && !isDeadmanActive()) {
                 currentState = IDLE_STATE;
             }
             break;
 
         case ESTOP_STATE:
-            // ESTOP is a hard-lock. Requires physical power cycle or hard reset.
+            // (Legacy state - Hardware E-stop moved to power circuit. 
+            // Retained in case the RPi sends a fatal software kill command).
             break;
     }
 
@@ -99,3 +99,8 @@ const char* getStateName(VcsState state) {
 // Getters for other modules
 bool isAutonomousMode() { return currentState == AUTONOMOUS_STATE; }
 uint32_t getDMSHoldStartTime() { return dmsStartTime; }
+
+
+bool isDrivingState() { 
+    return (currentState == MANUAL_STATE || currentState == AUTONOMOUS_STATE); 
+}

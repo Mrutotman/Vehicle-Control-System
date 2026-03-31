@@ -6,7 +6,9 @@
 #include "vcs_uart.h"
 #include "vcs_throttle.h"
 #include "vcs_lowbrake.h"
-#include "vcs_embutton.h"
+// #include "vcs_embutton.h"  <-- [REMOVED] Replaced by dual dead-man switches
+#include "vcs_deadman.h"      // [ADDED] Dual Hand Dead-Man Switch Logic
+#include "vcs_relays.h"       // [ADDED] 12V Strobe & Organizer State Relay Logic
 #include "vcs_steering.h"
 #include "vcs_hallsensor.h"
 #include "vcs_threespeed.h"
@@ -52,9 +54,9 @@ void ControlTask() {
 void CommTask() {
     for (;;) {
         // Poll hardware switches
-        updateEmButton();   
+        updateDeadman();    // [ADDED] Polls Left/Right grips for active AND gate
         updateLowBrake();   
-        updateThreeSpeed(); 
+        updateThreeSpeed(); // [UPDATED] Now applies software throttle limits
         updateReverse();
         
         // Parse incoming UART packets from the Pi
@@ -62,6 +64,9 @@ void CommTask() {
         
         // Audit system safety and transition states
         updateStateMachine(0); 
+
+        // Trigger hardware relays based on current state
+        updateRelays(isAutonomousMode());     // [ADDED] Fires the Orange Strobe & Organizer NO/NC Relay
         
         ThisThread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -83,18 +88,19 @@ void UITask() {
 void setup() {
     Serial.begin(115200);
     delay(1000); // Allow power to stabilize on boot
-    Serial.println("--- VCS v1.4 SYSTEM BOOTING (NANO 33 BLE) ---"); // [UPDATED] Version number
+    Serial.println("--- VCS v1.5 SEM AUTONOMOUS BOOTING (NANO 33 BLE) ---"); // [UPDATED]
 
     // 1. Hardware Module Initialization
     initState_Machine();
     initUART();
     initThrottle();
     initLowBrake();
-    initEmButton();
+    initDeadman();   // [ADDED]
+    initRelays();    // [ADDED]
     initSteering();
     initHallSensors();
     initThreeSpeed();
-    initReverse(); // [ADDED] Initialize reverse pins and default states
+    initReverse(); 
     initDisplay();
 
     // 2. Enable Mbed Hardware Watchdog (SEM Requirement)

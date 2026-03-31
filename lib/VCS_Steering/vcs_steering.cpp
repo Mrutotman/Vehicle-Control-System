@@ -23,7 +23,7 @@ void initSteering() {
     // Initial state: Disabled/Free
     // (Note: On standard TB6600/DM542 stepper drivers, ENA HIGH = Disabled. 
     // Leave this LOW if your specific driver requires LOW to disable).
-    digitalWrite(PIN_STEER_ENA, LOW); 
+    digitalWrite(PIN_STEER_ENA, HIGH); 
     noTone(PIN_STEER_PUL); // Ensure stepper is not pulsing
 
     // QuickPID Configuration
@@ -83,7 +83,7 @@ void updateSteeringPID(uint16_t target_position, bool is_automatic) {
 
     // --- SECURITY OVERRIDE ---
     if (!is_automatic || currentState == FAULT_STATE || currentState == ESTOP_STATE) {
-        digitalWrite(PIN_STEER_ENA, LOW); // Disable motor (verify this matches your driver spec!)
+        digitalWrite(PIN_STEER_ENA, HIGH); // Disable motor (verify this matches your driver spec!)
         noTone(PIN_STEER_PUL); 
         return; 
     }
@@ -93,11 +93,13 @@ void updateSteeringPID(uint16_t target_position, bool is_automatic) {
     // Deadband check
     if (abs(setpoint - input) < STEER_DEADZONE) {
         noTone(PIN_STEER_PUL);
-        digitalWrite(PIN_STEER_ENA, HIGH); // Enable motor holding torque
+        digitalWrite(PIN_STEER_ENA, LOW); // Enable motor holding torque
         return;
     }
 
-    // --- HARDWARE ACTUATION ---
+   // --- HARDWARE ACTUATION ---
+    digitalWrite(PIN_STEER_ENA, LOW); // Ensure motor is Locked/Enabled before moving!
+    
     bool dir = (output > 0);
     digitalWrite(PIN_STEER_DIR, dir ? HIGH : LOW);
 

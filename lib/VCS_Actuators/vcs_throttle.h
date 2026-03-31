@@ -15,5 +15,6 @@ extern uint16_t current_pwm_duty;
 
 void initThrottle();
 void updateThrottle(float measured_rpm, float target_rpm);
+bool isThrottlePedalPressed();
 
 #endif // VCS_THROTTLE_H

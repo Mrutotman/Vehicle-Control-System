@@ -3,13 +3,13 @@
 
 #include <Arduino.h>
 
-// Initializes the reverse switch and output pins
 void initReverse();
-
-// Evaluates the driver's request against current vehicle speed
 void updateReverse();
 
-// Returns true if reverse is actually active (useful for your OLED UI)
+// Returns true if the hardware is actively pulling the controller into reverse
 bool isReverseEngaged();
+
+// Returns true if the physical switch is flipped (used for Auto override)
+bool isReverseSwitchPressed();
 
 #endif // VCS_REVERSE_H

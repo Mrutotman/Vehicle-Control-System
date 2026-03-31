@@ -18,7 +18,6 @@ This system was architected and refined in collaboration with **Gemini 3.1 Pro**
 ### **v1.4 (Current - Custom PCB & Galvanic Isolation)**
 *The "Hardware Security" release. Focuses on migrating from loose wire prototypes to a professional, noise-immune physical board.*
 * **Custom PCB:** 100x80mm form factor with dedicated terminal blocks for perimeter harness wiring.
-* **Galvanic Isolation:** Integrated PC817 Optocoupler creating a physical barrier between the Nano's ground and the 60V vehicle ground.
 * **Analog Signal Conditioning:** On-board LM358 Op-Amp and RC filtering (`C1`, `C2`) for clean, hardware-smoothed throttle output.
 * **5V Logic Translation:** Dedicated TXS0108E level-shifting IC for reliable communication with the stepper driver and peripherals.
 
@@ -51,6 +50,10 @@ The VCS enforces a strict priority hierarchy. Motor power is physically impossib
 
 This section serves as the master reference for the V1.4 PCB, detailing the exact signal path from the physical perimeter terminal blocks to the Arduino Nano 33 BLE software pins based on the official schematic.
 
+Schematic Diagram of Vehicle Control System
+![Schematic Diagram of Vehicle Control System](assets/image_3099c0.png)
+
+PCB Footprint
 ![Close-up of final silkscreen labels for V1.4 perimeter terminal blocks](assets/image_3099c1.png)
 
 ### 📥 Inputs (Sensors & Driver Controls)

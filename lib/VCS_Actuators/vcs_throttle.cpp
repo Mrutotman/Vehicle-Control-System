@@ -1,4 +1,8 @@
 #include "vcs_throttle.h"
+#include "vcs_threespeed.h"
+#include "vcs_state_machine.h"
+#include "vcs_constants.h"
+#include "vcs_pins.h"
 
 // Global Telemetry Variables
 uint16_t current_throttle_adc = 0;
@@ -39,34 +43,35 @@ void initThrottle() {
 
 void updateThrottle(float current_rpm_in, float target_rpm_in) {
     // --- EMA FILTER INJECTION ---
-    // Read the raw noisy pin first
     int rawThrottle = analogRead(PIN_THROTTLE_IN);
-    
-    // Apply the EMA math to filter out motor spikes
     smoothedThrottle = (emaAlphaThrottle * rawThrottle) + ((1.0 - emaAlphaThrottle) * smoothedThrottle);
-    
-    // Assign the clean, smoothed value for telemetry and downstream logic
     current_throttle_adc = (uint16_t)smoothedThrottle;
 
+    // --- NEW: FETCH HARDWARE SPEED LIMIT ---
+    float speed_multiplier = getMaxThrottleMultiplier(); 
+    
+    // Calculate the dynamic max PWM based on the 3-position switch
+    // E.g., If MAX_PWM is 1023 and multiplier is 0.6, dynamic max is ~613.
+    int dynamic_max_pwm = MIN_PWM_OUT + (int)((MAX_PWM_OUT - MIN_PWM_OUT) * speed_multiplier);
+
+    // Update PID limits dynamically so the integral windup respects the physical switch
+    speedPID.SetOutputLimits(MIN_PWM_OUT, dynamic_max_pwm);
+
     // --- 1. HARDWARE SAFETY LOCKOUT ---
-    // Directly poll the physical brake pedal at 1000Hz. 
-    // LOW means the pedal is pressed (INPUT_PULLUP).
     bool isBrakePressed = (digitalRead(PIN_LOWBRAKE_IN) == LOW);
 
-    // If the state machine says we shouldn't be driving (e.g., FAULT, ESTOP, IDLE),
-    // OR if the driver physically steps on the brake pedal:
+    // If the state machine says we shouldn't be driving OR driver hits the brake
     if ((currentState != AUTONOMOUS_STATE && currentState != MANUAL_STATE) || isBrakePressed) {
         current_pwm_duty = MIN_PWM_OUT;
         analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
         
         speedPID.SetMode(QuickPID::Control::manual);
         throttle_pwm_out = MIN_PWM_OUT;
-        return; // Halt further throttle processing
+        return; 
     }
 
     // --- 2. AUTONOMOUS CONTROL (PID) ---
     if (currentState == AUTONOMOUS_STATE) {
-        // Re-engage PID if we just transitioned from Manual
         if (speedPID.GetMode() == (uint8_t)QuickPID::Control::manual) {
             speedPID.SetMode(QuickPID::Control::automatic);
         }
@@ -74,7 +79,6 @@ void updateThrottle(float current_rpm_in, float target_rpm_in) {
         measured_rpm = current_rpm_in;
         target_rpm = target_rpm_in;
         
-        // Compute() evaluates true if 1000us has passed
         if (speedPID.Compute()) {
             current_pwm_duty = (uint16_t)throttle_pwm_out;
             analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
@@ -84,19 +88,23 @@ void updateThrottle(float current_rpm_in, float target_rpm_in) {
     else if (currentState == MANUAL_STATE) {
         int mapped_pwm = MIN_PWM_OUT;
         
-        // Deadband logic: Ignore slight touches or sensor noise (Now using smoothed ADC)
         if (current_throttle_adc > THROTTLE_MIN_INPUT) {
-            mapped_pwm = map(current_throttle_adc, THROTTLE_MIN_INPUT, THROTTLE_MAX_INPUT, MIN_PWM_OUT, MAX_PWM_OUT);
-            mapped_pwm = constrain(mapped_pwm, MIN_PWM_OUT, MAX_PWM_OUT);
+            // Use the dynamic_max_pwm instead of the absolute MAX_PWM_OUT
+            mapped_pwm = map(current_throttle_adc, THROTTLE_MIN_INPUT, THROTTLE_MAX_INPUT, MIN_PWM_OUT, dynamic_max_pwm);
+            mapped_pwm = constrain(mapped_pwm, MIN_PWM_OUT, dynamic_max_pwm);
         }
         
         current_pwm_duty = mapped_pwm;
         analogWrite(PIN_THROTTLE_OUT, current_pwm_duty);
         
         // BUMPLESS TRANSFER: 
-        // Feed the manual PWM value back into the PID while in manual mode. 
-        // If the driver hits the DMS to engage Auto, the car won't jerk forward.
         throttle_pwm_out = mapped_pwm;
         speedPID.SetMode(QuickPID::Control::manual);
     }
+}
+
+// [ADDED] Helper function for the State Machine to check for manual override
+bool isThrottlePedalPressed() {
+    // Add a small safety margin above the minimum to prevent noise from dropping auto mode
+    return (current_throttle_adc > (THROTTLE_MIN_INPUT + 15));
 }

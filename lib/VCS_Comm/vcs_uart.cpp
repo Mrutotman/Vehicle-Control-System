@@ -27,6 +27,7 @@ static float target_rpm = 0.0f;
 static uint16_t target_steering = 500;
 static uint8_t target_brake = 0;
 static uint32_t last_valid_packet_time = 0;
+static bool target_direction_reverse = false; 
 
 // Function Prototypes
 uint16_t calculateCRC16(uint8_t *data, uint8_t length);
@@ -98,8 +99,10 @@ void updateUART() {
     }
 }
 
+
 void processCommand(uint8_t msgType, uint8_t *payload, uint8_t length) {
-    if (msgType == 0x01 && length >= 6) { 
+    // Increased expected length to 7 to include the reverse command
+    if (msgType == 0x01 && length >= 7) { 
         target_mode = payload[0];
         
         int16_t raw_speed = (int16_t)((payload[1] << 8) | payload[2]);
@@ -109,7 +112,13 @@ void processCommand(uint8_t msgType, uint8_t *payload, uint8_t length) {
         target_steering = constrain(raw_steer, COMM_STEER_LEFT, COMM_STEER_RIGHT);
         
         target_brake = constrain(payload[5], COMM_BRAKE_MIN, COMM_BRAKE_MAX);
+        
+        target_direction_reverse = (payload[6] == 1); 
     }
+}
+
+bool getRPiReverseCommand() { 
+    return target_direction_reverse; 
 }
 
 uint16_t calculateCRC16(uint8_t *data, uint8_t length) {
@@ -166,14 +175,13 @@ void sendTelemetry(float rpm, uint16_t steer, float volt, uint8_t state) {
 }
 
 void broadcastVehicleTelemetry() {
-    ANS_SERIAL.write(0xAA); 
-    ANS_SERIAL.write(0x07); // Length is now 7 bytes to include Gear and Reverse
-
+    uint8_t telBuffer[9]; // MsgType (1) + Length (1) + Payload (7)
+    
     float rpm;
     uint16_t steer;
     uint8_t state = (uint8_t)currentState;
     
-    // Read the new hardware states to send to Pi
+    // Read the hardware switch states
     uint8_t gear = 1; // Default to MED (1)
     if (digitalRead(PIN_SPEED_SW_LOW) == LOW) gear = 0;
     else if (digitalRead(PIN_SPEED_SW_HIGH) == LOW) gear = 2;
@@ -184,31 +192,43 @@ void broadcastVehicleTelemetry() {
         rpm = getSimulatedRPM();
         steer = getSimulatedSteering();
         
-        Serial.print("SIM DATA -> RPM: ");
-        Serial.print(rpm);
-        Serial.print(" | Steer: ");
-        Serial.print(steer);
-        Serial.print(" | Gear: ");
-        Serial.print(gear);
-        Serial.print(" | Rev: ");
-        Serial.println(rev);
+        // Optional: Keep debug printing for simulation only
+        Serial.print("SIM DATA -> RPM: "); Serial.print(rpm);
+        Serial.print(" | Steer: "); Serial.print(steer);
+        Serial.print(" | Gear: "); Serial.print(gear);
+        Serial.print(" | Rev: "); Serial.println(rev);
     #else
         rpm = getMeasuredRPM();
         steer = getMeasuredSteering();
     #endif
 
-    // Pack and send binary data to Raspberry Pi
-    ANS_SERIAL.write(((int)rpm >> 8) & 0xFF);
-    ANS_SERIAL.write((int)rpm & 0xFF);
-    ANS_SERIAL.write((steer >> 8) & 0xFF);
-    ANS_SERIAL.write(steer & 0xFF);
-    ANS_SERIAL.write(state);
-    ANS_SERIAL.write(gear);
-    ANS_SERIAL.write(rev);
-    ANS_SERIAL.write(0xFF); // End Byte
+    // Cast RPM to signed 16-bit integer for standard 2-byte transmission
+    int16_t rpmInt = (int16_t)rpm; 
+
+    // --- PACK THE BUFFER ---
+    telBuffer[0] = 0x02; // Message Type: Telemetry
+    telBuffer[1] = 0x07; // Payload Length: 7 bytes
+    
+    telBuffer[2] = (rpmInt >> 8) & 0xFF; // RPM High Byte
+    telBuffer[3] = rpmInt & 0xFF;        // RPM Low Byte
+    telBuffer[4] = (steer >> 8) & 0xFF;  // Steer High Byte
+    telBuffer[5] = steer & 0xFF;         // Steer Low Byte
+    telBuffer[6] = state;                // System State Enum
+    telBuffer[7] = gear;                 // 3-Speed Switch Position
+    telBuffer[8] = rev;                  // Reverse Engaged Status
+
+    // Calculate CRC16 over the Type, Length, and Payload bytes
+    uint16_t crc = calculateCRC16(telBuffer, 9);
+
+    // --- TRANSMIT THE SECURE PACKET ---
+    ANS_SERIAL.write(0xAA);               // Header 1
+    ANS_SERIAL.write(0x55);               // Header 2
+    ANS_SERIAL.write(telBuffer, 9);       // Data Buffer
+    ANS_SERIAL.write((crc >> 8) & 0xFF);  // CRC High Byte
+    ANS_SERIAL.write(crc & 0xFF);         // CRC Low Byte
+    ANS_SERIAL.write(0xFF);               // Footer
 }
 
-// [ADDED] Simple XOR Checksum for Basic Integrity Check on UART Commands (Not as robust as CRC16, but very lightweight)
 uint8_t calculateChecksum(const String& payload) {
     uint8_t checksum = 0;
     for (unsigned int i = 0; i < payload.length(); i++) {

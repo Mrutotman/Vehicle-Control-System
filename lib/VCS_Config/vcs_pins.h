@@ -4,14 +4,16 @@
 #include <Arduino.h>
 
 // ==============================================================================
-// MODULE:       VCS_Pins (Arduino Nano 33 BLE)
-// DESCRIPTION:  Centralized pin definitions mapped directly to manual PCB V1.4.
+// MODULE:      VCS_Pins (Arduino Nano 33 BLE)
+// DESCRIPTION: Centralized pin definitions mapped directly to manual PCB V1.4.
+//              *REVISED FOR SHELL ECO-MARATHON AUTONOMOUS RULES*
 // ==============================================================================
 
-// --- VCS_Displays ---
+// --- VCS_Displays & Relays ---
 #define PIN_OLED_SDA          A4  // I2C SDA
 #define PIN_OLED_SCL          A5  // I2C SCL
-#define PIN_LED_FAULT         A6  // Single External Dashboard LED (RED)
+#define PIN_RELAY_STROBE      A6  // D/A6 Output: 12V Orange Autonomous Beacon (Was Fault LED)
+#define PIN_RELAY_STATE       12  // D12 Output: Organizer Auto/Manual Relay (Repurposed from Speed Low)
 
 // --- VCS_Comm ---
 #define PIN_UART_RX           0   // D0 (RX from RPi TX)
@@ -23,22 +25,21 @@
 #define PIN_LOWBRAKE_IN       8   // D8 Input: Physical Pedal Switch (INPUT_PULLUP)
 #define PIN_LOWBRAKE_OUT      3   // D3 Output: To PC817 Optocoupler (Galvanic Isolation)
 
-// --- VCS_Safety_Switches ---
-#define PIN_EMBUTTON          4   // D4 Input: E-Stop Switch (INPUT_PULLUP)
-#define PIN_DMS_BUTTON        2   // D2 Input: Dead Man's Switch (INPUT_PULLUP)
+// --- VCS_Safety_Switches (Dual Hand Dead-Man) ---
+#define PIN_DMS_LEFT          2   // D2 Input: Left Hand Grip (Active Low / INPUT_PULLUP)
+#define PIN_DMS_RIGHT         4   // D4 Input: Right Hand Grip (Active Low / INPUT_PULLUP)
 
-// --- VCS_Transmission (Gears & Reverse) ---
-#define PIN_SPEED_SW_LOW      A3  // Input: Physical 3-Pos Switch (Low)
-#define PIN_SPEED_SW_HIGH     A7  // Input: Physical 3-Pos Switch (High)
-#define PIN_SPEED_LOW         12  // D12 Output: To Shifter -> Controller Brown Wire
-#define PIN_SPEED_HIGH        11  // D11 Output: To Shifter -> Controller Blue Wire
+// --- VCS_Transmission (Software Limits & Reverse) ---
+#define PIN_SPEED_SW_LOW      A3  // Input: Physical ON-OFF-ON Switch (Low Pos)
+#define PIN_SPEED_SW_HIGH     A7  // Input: Physical ON-OFF-ON Switch (High Pos)
+// Note: D11 (Old Speed High) is currently left disconnected/spare.
 #define PIN_REVERSE_IN        A2  // Input: Driver's Reverse Switch (INPUT_PULLUP)
-#define PIN_REVERSE_OUT       13  // Output: To Shifter -> Controller Yellow Wire
+#define PIN_REVERSE_OUT       13  // D13 Output: To Shifter -> Controller Yellow Wire
 
 // --- VCS_Steering ---
 #define PIN_STEER_PUL         5   // D5 Output: To Shifter -> Stepper PUL+
 #define PIN_STEER_DIR         6   // D6 Output: To Shifter -> Stepper DIR+
-#define PIN_STEER_ENA         7   // D7 Output: To Shifter -> Stepper ENA+
+#define PIN_STEER_ENA         7   // D7 Output: To Shifter -> Stepper ENA+ (Active Low)
 #define PIN_STEER_POT         A0  // Input: 10-turn Steering Potentiometer
 
 // --- VCS_Sensors ---

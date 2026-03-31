@@ -1,6 +1,8 @@
 #include "vcs_reverse.h"
 #include "vcs_pins.h"
-#include "vcs_hallsensor.h" // Required to fetch getMeasuredRPM()
+#include "vcs_hallsensor.h" 
+#include "vcs_state_machine.h" 
+#include "vcs_uart.h"
 
 // Track the actual state for telemetry and UI
 static bool reverseEngaged = false;
@@ -17,17 +19,38 @@ void initReverse() {
 }
 
 void updateReverse() {
-    // 1. Read what the driver wants
-    bool reverseRequested = (digitalRead(PIN_REVERSE_IN) == LOW);
+    // 1. Read the inputs
+    bool manualReverseRequested = isReverseSwitchPressed();
+    bool autoReverseRequested = getRPiReverseCommand(); // Fetch from UART module
     
     // 2. Read what the car is actually doing
-    // Assuming getMeasuredRPM() returns the absolute speed value
     int currentRPM = getMeasuredRPM(); 
 
-    // 3. The Security Gate
-    // Only allow the controller to reverse if the car is basically stopped.
-    // (Threshold of 5 RPM accounts for minor sensor noise/vibration).
-    if (reverseRequested && currentRPM < 5) {
+    // --- 3. THE SECURITY GATES ---
+    // Gate A: Is the car effectively stopped? (Crucial hardware protection)
+    bool isStopped = (currentRPM < 5);
+    
+    // Gate B: Determine which mode holds authority
+    bool isManual = (currentState == MANUAL_STATE || currentState == IDLE_STATE);
+    bool isAuto = (currentState == AUTONOMOUS_STATE);
+
+    // --- 4. THE DECISION MATRIX ---
+    bool triggerReverse = false;
+
+    // Only allow a shift if the car is stopped
+    if (isStopped) {
+        // If human is driving and human wants reverse
+        if (isManual && manualReverseRequested) {
+            triggerReverse = true;
+        } 
+        // If Pi is driving and Pi wants reverse
+        else if (isAuto && autoReverseRequested) {
+            triggerReverse = true;
+        }
+    }
+
+    // --- 5. HARDWARE ACTUATION ---
+    if (triggerReverse) {
         digitalWrite(PIN_REVERSE_OUT, LOW); // Pull Yellow wire to Ground
         reverseEngaged = true;
     } else {
@@ -38,4 +61,8 @@ void updateReverse() {
 
 bool isReverseEngaged() {
     return reverseEngaged;
+}
+
+bool isReverseSwitchPressed() {
+    return (digitalRead(PIN_REVERSE_IN) == LOW);
 }

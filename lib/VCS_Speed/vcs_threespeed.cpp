@@ -1,56 +1,58 @@
 /* ==============================================================================
  * MODULE:        VCS_ThreeSpeed
- * RESPONSIBILITY: Handle physical 3-position switch and optocoupler outputs.
+ * RESPONSIBILITY: Read physical 3-position switch and apply software speed limits.
+ * *REVISED FOR AUTONOMOUS SOFTWARE LIMITS*
  * ============================================================================== */
 
 #include "vcs_threespeed.h"
 #include "vcs_pins.h"
-#include "vcs_state_machine.h"
-#include "vcs_constants.h"
-#include "vcs_uart.h" // For RPi command access in Autonomous mode
 
-uint8_t current_drive_mode = 1; // Default to Medium on boot
+DriveMode current_drive_mode = DRIVE_MED; 
+static float speed_limit_multiplier = 0.60f; // Default to 60% on boot
 
 void initThreeSpeed() {
-    pinMode(PIN_SPEED_SW_LOW, INPUT);
-    pinMode(PIN_SPEED_SW_HIGH, INPUT);
+    // Enable internal pull-ups so grounding the pins gives a clean LOW
+    pinMode(PIN_SPEED_SW_LOW, INPUT_PULLUP);
+    pinMode(PIN_SPEED_SW_HIGH, INPUT_PULLUP);
     
-    pinMode(PIN_SPEED_LOW, OUTPUT);
-    pinMode(PIN_SPEED_HIGH, OUTPUT);
-    
+    // Note: pinMode OUTPUTS for physical speed wires were removed 
+    // because D12 was repurposed for the Organizer Relay in V1.5.
+
     setDriveMode(DRIVE_MED); // Default on boot
 }
 
 void updateThreeSpeed() {
-    // Only allow the physical switch to control speed if we are in MANUAL mode
-    if (currentState == MANUAL_STATE) {
-        bool swLow = digitalRead(PIN_SPEED_SW_LOW);
-        bool swHigh = digitalRead(PIN_SPEED_SW_HIGH);
 
-        if (swLow == LOW) { // Assuming Active LOW (Switch pulls pin to GND)
-            setDriveMode(DRIVE_LOW);
-        } else if (swHigh == LOW) {
-            setDriveMode(DRIVE_HIGH);
-        } else {
-            setDriveMode(DRIVE_MED); // Center position / No pins grounded
-        }
+    bool swLow = (digitalRead(PIN_SPEED_SW_LOW) == LOW);
+    bool swHigh = (digitalRead(PIN_SPEED_SW_HIGH) == LOW);
+
+    if (swLow) { 
+        setDriveMode(DRIVE_LOW);
+    } else if (swHigh) {
+        setDriveMode(DRIVE_HIGH);
+    } else {
+        setDriveMode(DRIVE_MED); // Center position / No pins grounded
     }
-    // Note: In AUTONOMOUS_STATE, the Raspberry Pi controls this via setDriveMode()
 }
 
 void setDriveMode(DriveMode mode) {
+    current_drive_mode = mode;
+    
+    // Instead of triggering hardware relays, we set a software throttle multiplier.
+    // The vcs_throttle.cpp module will multiply its final PWM output by this number.
     switch (mode) {
         case DRIVE_LOW:
-            digitalWrite(PIN_SPEED_LOW, HIGH);  // Trigger Low-Speed Opto
-            digitalWrite(PIN_SPEED_HIGH, LOW);
+            speed_limit_multiplier = 0.30f; // 30% Max Throttle
             break;
         case DRIVE_MED:
-            digitalWrite(PIN_SPEED_LOW, LOW);   // Both Open = Controller Default (Med)
-            digitalWrite(PIN_SPEED_HIGH, LOW);
+            speed_limit_multiplier = 0.60f; // 60% Max Throttle
             break;
         case DRIVE_HIGH:
-            digitalWrite(PIN_SPEED_LOW, LOW);
-            digitalWrite(PIN_SPEED_HIGH, HIGH); // Trigger High-Speed Opto
+            speed_limit_multiplier = 1.00f; // 100% Max Throttle
             break;
     }
+}
+
+float getMaxThrottleMultiplier() {
+    return speed_limit_multiplier;
 }

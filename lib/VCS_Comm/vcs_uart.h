@@ -16,6 +16,7 @@ uint8_t getRPiCommandMode();
 float getTargetRPM(); 
 uint16_t getTargetSteering(); 
 uint8_t getTargetBrake(); 
+bool getRPiReverseCommand();
 
 // Security checks
 bool rpiHeartbeatReceived();
